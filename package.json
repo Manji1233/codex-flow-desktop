@@ -1,12 +1,12 @@
 {
   "name": "codex-flow-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "输入 API Key 即可使用的多模型桌面与终端 AI 客户端",
   "main": "electron/main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check electron/main.cjs && node --check electron/cli-main.cjs && node --check electron/preload.cjs && node --check electron/services/config-store.cjs && node --check electron/services/openai-client.cjs && node --check electron/services/coding-plans.cjs && node --check electron/services/usage-store.cjs && node --check bin/codex-flow.cjs && node --check app.js",
+    "check": "node --check electron/main.cjs && node --check electron/cli-main.cjs && node --check electron/preload.cjs && node --check electron/services/config-store.cjs && node --check electron/services/openai-client.cjs && node --check electron/services/coding-plans.cjs && node --check electron/services/usage-store.cjs && node --check electron/services/codex-cli-service.cjs && node --check electron/services/web-search-service.cjs && node --check bin/codex-flow.cjs && node --check app.js",
     "test": "node --test test/*.test.cjs",
     "cli": "node bin/codex-flow.cjs"
   },
@@ -15,5 +15,11 @@
   },
   "bin": {
     "codex-flow": "bin/codex-flow.cjs"
+  },
+  "dependencies": {
+    "@openai/codex": "^0.144.1",
+    "cheerio": "^1.2.0",
+    "dompurify": "^3.4.11",
+    "marked": "^18.0.6"
   }
 }
