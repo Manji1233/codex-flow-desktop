@@ -1,0 +1,27 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+
+# 日志
+*.log
+问题日志.md
+
+# 本地密钥、配置与用量账本
+.env
+.env.*
+!.env.example
+codex-flow-config.json
+codex-flow-usage.json
+**/codex-flow-config.json
+**/codex-flow-usage.json
+credentials*.json
+secrets*.json
+*.pem
+*.key
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
