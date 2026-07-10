@@ -17,6 +17,7 @@ function buildAppServerArgs(provider) {
     '-c', 'model_providers.codex_flow.env_key="CODEX_FLOW_API_KEY"',
     '-c', 'model_providers.codex_flow.wire_api="responses"',
     '-c', 'model_providers.codex_flow.requires_openai_auth=false',
+    '-c', 'sandbox_workspace_write.network_access=true',
     'app-server', '--stdio'
   ];
 }

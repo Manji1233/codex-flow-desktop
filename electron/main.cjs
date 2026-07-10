@@ -209,6 +209,7 @@ function registerIpc() {
   ipcMain.handle('app-server:turn-start', async (_event, payload) => {
     await ensureAppServer();
     const input = [...(payload.input || [])];
+    const workspace = payload.workspace || process.cwd();
     if (payload.webSearch !== false) {
       const textIndex = input.findIndex(item => item.type === 'text');
       if (textIndex >= 0) {
@@ -225,9 +226,10 @@ function registerIpc() {
     return appServer.request('turn/start', {
       threadId: payload.threadId,
       input,
-      cwd: payload.workspace || null,
-      runtimeWorkspaceRoots: payload.workspace ? [payload.workspace] : null,
+      cwd: workspace,
+      runtimeWorkspaceRoots: [workspace],
       approvalPolicy: payload.approvalPolicy || 'on-request',
+      sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
       model: payload.model || null,
       multiAgentMode: payload.multiAgentMode || 'explicitRequestOnly',
       ...(payload.multiAgentMode === 'proactive' ? { effort: 'ultra' } : {})

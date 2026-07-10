@@ -9,6 +9,7 @@ test('app-server arguments configure a Responses-compatible custom provider', ()
   assert.ok(args.includes('model_providers.codex_flow.base_url="https://example.com/v1"'));
   assert.ok(args.includes('model_providers.codex_flow.wire_api="responses"'));
   assert.ok(args.includes('model_providers.codex_flow.env_key="CODEX_FLOW_API_KEY"'));
+  assert.ok(args.includes('sandbox_workspace_write.network_access=true'));
 });
 
 test('app-server correlates JSONL responses and forwards notifications', async () => {

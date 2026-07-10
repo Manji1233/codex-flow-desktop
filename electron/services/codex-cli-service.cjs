@@ -176,6 +176,7 @@ async function runAgent({ provider, model, prompt, workspace, webSearch, onEvent
     '-c', 'model_providers.codex_flow.env_key="CODEX_FLOW_API_KEY"',
     '-c', 'model_providers.codex_flow.wire_api="responses"',
     '-c', 'model_providers.codex_flow.requires_openai_auth=false',
+    '-c', 'sandbox_workspace_write.network_access=true',
     'exec', '--json', '--skip-git-repo-check', '-s', 'workspace-write', '-C', workspace, prompt
   );
 
