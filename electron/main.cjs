@@ -8,6 +8,7 @@ const { getStatus, listExtensions, installPlugin, removePlugin, addMcp, removeMc
 const { searchWeb, buildSearchContext } = require('./services/web-search-service.cjs');
 const { TaskStore } = require('./services/task-store.cjs');
 const { ContentStore } = require('./services/content-store.cjs');
+const { AppServerService } = require('./services/app-server-service.cjs');
 
 app.setName('codex-flow-desktop');
 
@@ -16,8 +17,10 @@ let configStore;
 let usageStore;
 let taskStore;
 let contentStore;
+let appServer;
 let schedulerTimer;
 const activeRequests = new Map();
+const appServerUsage = new Map();
 let taskQueue = Promise.resolve();
 
 function withTaskStore(operation, reload = true) {
@@ -27,6 +30,27 @@ function withTaskStore(operation, reload = true) {
   });
   taskQueue = next.catch(() => {});
   return next;
+}
+
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+}
+
+async function ensureAppServer() {
+  const provider = configStore.getProviderWithSecret();
+  await appServer.ensure(provider);
+  return provider;
+}
+
+function interactiveThreadConfig(payload, provider) {
+  return {
+    model: payload.model || provider.model,
+    modelProvider: 'codex_flow',
+    cwd: payload.workspace || process.cwd(),
+    runtimeWorkspaceRoots: payload.workspace ? [payload.workspace] : null,
+    approvalPolicy: payload.approvalPolicy || 'on-request',
+    sandbox: payload.sandbox || 'workspace-write'
+  };
 }
 
 function createWindow() {
@@ -163,6 +187,55 @@ function registerIpc() {
   ipcMain.handle('prompts:remove', (_event, id) => contentStore.removePrompt(id));
   ipcMain.handle('conversation:export', async (_event, payload) => { const result = await dialog.showSaveDialog(mainWindow, { title: '导出对话', defaultPath: (payload.title || 'codex-flow-session') + '.md', filters: [{ name: 'Markdown', extensions: ['md'] }] }); if (result.canceled) return null; await require('node:fs/promises').writeFile(result.filePath, payload.content, 'utf8'); return result.filePath; });
   ipcMain.handle('media:choose', async () => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile','multiSelections'], filters: [{ name: '媒体文件', extensions: ['mp4','mov','mkv','mp3','wav','png','jpg','jpeg','webp'] }] }); return result.canceled ? [] : result.filePaths; });
+  ipcMain.handle('images:choose', async () => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile','multiSelections'], filters: [{ name: '图片', extensions: ['png','jpg','jpeg','webp','gif'] }] }); return result.canceled ? [] : result.filePaths; });
+  ipcMain.handle('app-server:status', async () => { try { await ensureAppServer(); return { available: true }; } catch (error) { return { available: false, error: error.message }; } });
+  ipcMain.handle('app-server:thread-list', async (_event, payload = {}) => {
+    await ensureAppServer();
+    return appServer.request('thread/list', {
+      limit: payload.limit || 50,
+      archived: Boolean(payload.archived),
+      searchTerm: payload.searchTerm || null,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      sourceKinds: ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown']
+    });
+  });
+  ipcMain.handle('app-server:thread-read', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/read', { threadId, includeTurns: true }); });
+  ipcMain.handle('app-server:thread-start', async (_event, payload) => { const provider = await ensureAppServer(); return appServer.request('thread/start', { ...interactiveThreadConfig(payload, provider), ephemeral: false, historyMode: 'legacy' }); });
+  ipcMain.handle('app-server:thread-resume', async (_event, payload) => { const provider = await ensureAppServer(); return appServer.request('thread/resume', { threadId: payload.threadId, ...interactiveThreadConfig(payload, provider) }); });
+  ipcMain.handle('app-server:thread-fork', async (_event, payload) => { const provider = await ensureAppServer(); return appServer.request('thread/fork', { threadId: payload.threadId, lastTurnId: payload.lastTurnId || null, ...interactiveThreadConfig(payload, provider) }); });
+  ipcMain.handle('app-server:thread-archive', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/archive', { threadId }); });
+  ipcMain.handle('app-server:thread-unarchive', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/unarchive', { threadId }); });
+  ipcMain.handle('app-server:turn-start', async (_event, payload) => {
+    await ensureAppServer();
+    const input = [...(payload.input || [])];
+    if (payload.webSearch !== false) {
+      const textIndex = input.findIndex(item => item.type === 'text');
+      if (textIndex >= 0) {
+        sendToRenderer('app-server:event', { method: 'codex-flow/search', params: { status: 'running', text: '正在搜索实时网络信息' } });
+        try {
+          const results = await searchWeb(input[textIndex].text);
+          input[textIndex] = { ...input[textIndex], text: buildSearchContext(input[textIndex].text, results) };
+          sendToRenderer('app-server:event', { method: 'codex-flow/search', params: { status: 'completed', text: '已检索 ' + results.length + ' 个网络来源' } });
+        } catch {
+          sendToRenderer('app-server:event', { method: 'codex-flow/search', params: { status: 'completed', text: '客户端搜索不可用，继续使用 Codex 工具' } });
+        }
+      }
+    }
+    return appServer.request('turn/start', {
+      threadId: payload.threadId,
+      input,
+      cwd: payload.workspace || null,
+      runtimeWorkspaceRoots: payload.workspace ? [payload.workspace] : null,
+      approvalPolicy: payload.approvalPolicy || 'on-request',
+      model: payload.model || null,
+      multiAgentMode: payload.multiAgentMode || 'explicitRequestOnly',
+      ...(payload.multiAgentMode === 'proactive' ? { effort: 'ultra' } : {})
+    });
+  });
+  ipcMain.handle('app-server:turn-steer', async (_event, payload) => { await ensureAppServer(); return appServer.request('turn/steer', { threadId: payload.threadId, expectedTurnId: payload.turnId, input: payload.input }); });
+  ipcMain.handle('app-server:turn-interrupt', async (_event, payload) => { await ensureAppServer(); return appServer.request('turn/interrupt', { threadId: payload.threadId, turnId: payload.turnId }); });
+  ipcMain.handle('app-server:respond', async (_event, payload) => { await ensureAppServer(); appServer.respond(payload.requestId, payload.result, payload.error); return true; });
   ipcMain.handle('codex:status', () => getStatus());
   ipcMain.handle('extensions:list', () => listExtensions());
   ipcMain.handle('extensions:install', (_event, pluginId) => installPlugin(pluginId));
@@ -270,6 +343,34 @@ app.whenReady().then(async () => {
   taskStore = new TaskStore(app.getPath('userData'));
   contentStore = new ContentStore(app.getPath('userData'));
   await Promise.all([configStore.load(), usageStore.load(), taskStore.load(), contentStore.load()]);
+  appServer = new AppServerService({
+    onNotification: async notification => {
+      sendToRenderer('app-server:event', notification);
+      if (notification.method === 'thread/tokenUsage/updated') {
+        const usage = notification.params.tokenUsage?.last;
+        if (usage) appServerUsage.set(notification.params.turnId, usage);
+      }
+      if (notification.method === 'turn/completed') {
+        const turnId = notification.params.turn?.id;
+        const usage = appServerUsage.get(turnId);
+        if (usage) {
+          appServerUsage.delete(turnId);
+          try {
+            const provider = configStore.getProviderWithSecret();
+            const record = await recordUsage({ requestId: turnId, provider, model: provider.model, usage: { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens, total_tokens: usage.totalTokens } });
+            sendToRenderer('app-server:event', { method: 'codex-flow/usage', params: { threadId: notification.params.threadId, turnId, record } });
+          } catch {}
+        }
+      }
+    },
+    onServerRequest: request => {
+      if (mainWindow && !mainWindow.isDestroyed()) return sendToRenderer('app-server:request', request);
+      if (request.method === 'item/tool/requestUserInput') appServer.respond(request.requestId, { answers: {} });
+      else if (request.method === 'item/permissions/requestApproval') appServer.respond(request.requestId, { permissions: {}, scope: 'turn' });
+      else appServer.respond(request.requestId, { decision: 'cancel' });
+    },
+    onStatus: status => sendToRenderer('app-server:status', status)
+  });
   const currentConfig = configStore.publicConfig();
   const codingPlan = getCodingPlan(currentConfig.provider?.baseUrl);
   if (codingPlan) {
@@ -286,7 +387,7 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', () => clearInterval(schedulerTimer));
+app.on('before-quit', () => { clearInterval(schedulerTimer); appServer?.stop(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

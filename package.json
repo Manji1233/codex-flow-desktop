@@ -6,7 +6,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check electron/main.cjs && node --check electron/cli-main.cjs && node --check electron/preload.cjs && node --check electron/services/config-store.cjs && node --check electron/services/openai-client.cjs && node --check electron/services/coding-plans.cjs && node --check electron/services/usage-store.cjs && node --check electron/services/codex-cli-service.cjs && node --check electron/services/web-search-service.cjs && node --check electron/services/task-store.cjs && node --check electron/services/content-store.cjs && node --check bin/codex-flow.cjs && node --check app.js",
+    "check": "node --check electron/main.cjs && node --check electron/cli-main.cjs && node --check electron/preload.cjs && node --check electron/services/config-store.cjs && node --check electron/services/openai-client.cjs && node --check electron/services/coding-plans.cjs && node --check electron/services/usage-store.cjs && node --check electron/services/codex-cli-service.cjs && node --check electron/services/app-server-service.cjs && node --check electron/services/web-search-service.cjs && node --check electron/services/task-store.cjs && node --check electron/services/content-store.cjs && node --check bin/codex-flow.cjs && node --check app.js",
     "test": "node --test test/*.test.cjs",
     "cli": "node bin/codex-flow.cjs"
   },

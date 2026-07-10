@@ -52,6 +52,18 @@ let taskFilter = 'all';
 let historySessions = [];
 let savedPrompts = [];
 let activeUsageRange = 'month';
+let currentThreadId = null;
+let currentTurnId = null;
+let lastTurnId = null;
+let currentThread = null;
+let selectedImages = [];
+let codexThreads = [];
+let pendingInteraction = null;
+let appServerTurnContext = null;
+let removeAppServerEventListener = null;
+let removeAppServerRequestListener = null;
+let removeAppServerStatusListener = null;
+const collabAgents = new Map();
 
 function cleanError(error) {
   return String(error?.message || error || '操作失败').replace(/^Error invoking remote method '[^']+': Error:\s*/, '');
@@ -89,22 +101,27 @@ function toastMsg(text) {
   toastMsg.timer = setTimeout(() => byId('toast').classList.remove('show'), 2400);
 }
 
+function markdownHtml(markdown) {
+  if (window.marked && window.DOMPurify) {
+    window.marked.setOptions({ gfm: true, breaks: true });
+    return window.DOMPurify.sanitize(window.marked.parse(markdown || ''));
+  }
+  return '<p>' + escapeHtml(markdown || '').replace(/\n/g, '<br>') + '</p>';
+}
+
+function secureMarkdownLinks(root) {
+  root?.querySelectorAll('a[href]').forEach(link => {
+    link.target = '_blank';
+    link.rel = 'noreferrer noopener';
+  });
+}
+
 function renderMarkdown(markdown) {
   answerMarkdown = markdown || '';
   const answer = byId('answer');
   if (!answer) return;
-  let html;
-  if (window.marked && window.DOMPurify) {
-    window.marked.setOptions({ gfm: true, breaks: true });
-    html = window.DOMPurify.sanitize(window.marked.parse(answerMarkdown));
-  } else {
-    html = '<p>' + escapeHtml(answerMarkdown).replace(/\n/g, '<br>') + '</p>';
-  }
-  answer.innerHTML = html;
-  answer.querySelectorAll('a[href]').forEach(link => {
-    link.target = '_blank';
-    link.rel = 'noreferrer noopener';
-  });
+  answer.innerHTML = markdownHtml(answerMarkdown);
+  secureMarkdownLinks(answer);
   answer.classList.remove('hide');
   byId('answerActions')?.classList.remove('hide');
 }
@@ -112,6 +129,14 @@ function renderMarkdown(markdown) {
 function prepareConversation(prompt, agentMode = true) {
   byId('hero').classList.add('hide');
   byId('conversation').classList.remove('hide');
+  let threadHistory = byId('threadHistory');
+  if (!threadHistory) {
+    threadHistory = document.createElement('div');
+    threadHistory.id = 'threadHistory';
+    threadHistory.className = 'thread-history';
+    byId('conversation').prepend(threadHistory);
+  }
+  threadHistory.innerHTML = '';
   byId('userText').textContent = prompt;
   byId('agentState').textContent = agentMode ? 'Codex Flow · Agent 执行中' : 'Codex Flow · 普通对话';
   byId('thinking').textContent = agentMode ? '正在启动 Codex Agent...' : '正在等待模型响应...';
@@ -143,12 +168,231 @@ function addToolEvent(event) {
 
 function finishRequest() {
   activeRequestId = null;
+  currentTurnId = null;
   byId('send').textContent = '↑';
+  byId('interruptTurn')?.classList.add('hide');
   document.querySelector('.composer').classList.remove('busy');
   byId('thinking').classList.add('hide');
   byId('agentState').textContent = 'Codex Flow · 已完成';
   loadUsage('month');
   loadHistory();
+}
+
+function appServerItemDescription(item) {
+  if (item.type === 'commandExecution') return item.command ? '执行命令：' + item.command : '执行终端命令';
+  if (item.type === 'fileChange') return '修改工作区文件';
+  if (item.type === 'mcpToolCall') return '调用 MCP：' + item.server + ' / ' + item.tool;
+  if (item.type === 'dynamicToolCall') return '调用工具：' + item.tool;
+  if (item.type === 'webSearch') return '正在联网搜索';
+  if (item.type === 'reasoning') return '正在分析任务';
+  if (item.type === 'collabAgentToolCall') return '多代理协作：' + item.tool;
+  if (item.type === 'subAgentActivity') return '子代理活动：' + item.kind;
+  if (item.type === 'imageGeneration') return '正在生成图片';
+  if (item.type === 'imageView') return '正在查看图片';
+  return '正在执行：' + String(item.type || '任务');
+}
+
+function renderAgentGraph() {
+  const agents = [...collabAgents.entries()];
+  byId('agentGraph').innerHTML = agents.length ? agents.map(([id, agent]) => '<article><i class="' + (agent.status === 'completed' || agent.status === 'closed' ? 'done' : agent.status === 'failed' ? 'failed' : '') + '">' + (agent.status === 'completed' ? '✓' : '◉') + '</i><span><b>' + escapeHtml(agent.nickname || 'Agent ' + id.slice(0, 6)) + '</b><small>' + escapeHtml(agent.status || '运行中') + (agent.message ? ' · ' + escapeHtml(agent.message) : '') + '</small></span></article>').join('') : '<small>当前没有协作 Agent</small>';
+}
+
+function updateCollabItem(item) {
+  if (item.type === 'collabAgentToolCall') {
+    for (const id of item.receiverThreadIds || []) {
+      const state = item.agentsStates?.[id] || {};
+      collabAgents.set(id, { ...collabAgents.get(id), status: state.status || item.status, message: state.message || item.prompt || '' });
+    }
+  }
+  if (item.type === 'subAgentActivity') collabAgents.set(item.agentThreadId, { ...collabAgents.get(item.agentThreadId), status: item.kind, message: item.agentPath });
+  renderAgentGraph();
+}
+
+async function handleAppServerEvent(event) {
+  const { method, params } = event;
+  if (method === 'codex-flow/search') {
+    addToolEvent({ itemType: 'webSearch', text: params.text, status: params.status });
+    byId('thinking').textContent = params.text;
+    return;
+  }
+  if (method === 'serverRequest/resolved' && pendingInteraction && String(params.requestId) === String(pendingInteraction.requestId)) {
+    pendingInteraction = null;
+    modal('approvalModal', false);
+    modal('userInputModal', false);
+    return;
+  }
+  if (method === 'turn/started' && params.threadId === currentThreadId) {
+    currentTurnId = params.turn.id;
+    lastTurnId = params.turn.id;
+    document.querySelector('.composer').classList.add('busy');
+    byId('interruptTurn').classList.remove('hide');
+    byId('agentState').textContent = 'Codex Flow · app-server 执行中';
+    return;
+  }
+  if (method === 'item/agentMessage/delta' && params.threadId === currentThreadId) {
+    answerMarkdown += params.delta;
+    renderMarkdown(answerMarkdown);
+    return;
+  }
+  if ((method === 'item/started' || method === 'item/completed') && params.threadId === currentThreadId) {
+    const item = params.item || {};
+    if (item.type === 'agentMessage' && item.text) renderMarkdown(item.text);
+    else if (item.type !== 'userMessage') addToolEvent({ itemType: item.type, text: appServerItemDescription(item), status: method === 'item/completed' ? 'completed' : 'running' });
+    updateCollabItem(item);
+    return;
+  }
+  if (method === 'codex-flow/usage' && params.threadId === currentThreadId) {
+    byId('inToken').textContent = Number(params.record.inputTokens || 0).toLocaleString('zh-CN');
+    byId('outToken').textContent = Number(params.record.outputTokens || 0).toLocaleString('zh-CN');
+    return;
+  }
+  if (method === 'turn/completed' && params.threadId === currentThreadId) {
+    lastTurnId = params.turn.id;
+    const turnContext = appServerTurnContext;
+    appServerTurnContext = null;
+    if (params.turn.status === 'failed') {
+      byId('thinking').textContent = params.turn.error?.message || '本轮执行失败。';
+      byId('thinking').classList.add('stream-error');
+      finishRequest();
+      if (turnContext?.hasImages) {
+        toastMsg('当前接口不兼容 app-server，图片附件暂时无法回退执行');
+        return;
+      }
+      if (turnContext) {
+        currentThreadId = null;
+        currentThread = null;
+        toastMsg('app-server 执行失败，已回退到 Codex exec');
+        await runAgentFallback(turnContext.prompt, turnContext.context);
+      }
+      return;
+    }
+    finishRequest();
+    loadCodexSessions();
+    return;
+  }
+  if (method === 'error') {
+    byId('thinking').textContent = params.error?.message || params.message || 'app-server 出现错误。';
+    byId('thinking').classList.add('stream-error');
+  }
+}
+
+function interactionDetail(request) {
+  const params = request.params || {};
+  if (request.method === 'item/commandExecution/requestApproval') return (params.reason ? params.reason + '\n\n' : '') + (params.command || '终端命令') + (params.cwd ? '\n\n工作目录：' + params.cwd : '');
+  if (request.method === 'item/fileChange/requestApproval') return (params.reason || 'Codex 请求修改工作区文件。') + (params.grantRoot ? '\n\n目录：' + params.grantRoot : '');
+  if (request.method === 'item/permissions/requestApproval') return (params.reason || 'Codex 请求额外权限。') + '\n\n' + JSON.stringify(params.permissions || {}, null, 2);
+  return JSON.stringify(params, null, 2);
+}
+
+function handleAppServerRequest(request) {
+  pendingInteraction = request;
+  if (request.method === 'item/tool/requestUserInput') {
+    const questions = request.params.questions || [];
+    byId('userInputQuestions').innerHTML = questions.map(question => {
+      const options = question.options?.length ? '<select>' + question.options.map(option => '<option value="' + escapeHtml(option.label) + '">' + escapeHtml(option.label) + ' — ' + escapeHtml(option.description) + '</option>').join('') + '</select>' : '';
+      const custom = (!question.options?.length || question.isOther) ? '<input data-custom-answer ' + (question.isSecret ? 'type="password"' : '') + ' placeholder="' + (question.options?.length ? '或输入自定义回答' : '请输入回答') + '">' : '';
+      return '<fieldset data-question="' + escapeHtml(question.id) + '"><legend>' + escapeHtml(question.header || '补充信息') + '</legend><p>' + escapeHtml(question.question) + '</p>' + options + custom + '</fieldset>';
+    }).join('');
+    modal('userInputModal');
+    return;
+  }
+  if (['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/permissions/requestApproval'].includes(request.method)) {
+    byId('approvalTitle').textContent = request.method.includes('commandExecution') ? '允许执行命令？' : request.method.includes('fileChange') ? '允许修改文件？' : '允许额外权限？';
+    byId('approvalDetail').textContent = interactionDetail(request);
+    byId('approvalSessionScope').checked = false;
+    modal('approvalModal');
+    return;
+  }
+  bridge.appServer.respond({ requestId: request.requestId, error: { code: -32601, message: 'Codex Flow 暂不支持此交互请求。' } });
+  pendingInteraction = null;
+}
+
+function buildTurnInput(text) {
+  const input = [];
+  if (text) input.push({ type: 'text', text, text_elements: [] });
+  selectedImages.forEach(path => input.push({ type: 'localImage', path }));
+  return input;
+}
+
+async function respondToInteraction(result) {
+  if (!pendingInteraction) return;
+  const request = pendingInteraction;
+  pendingInteraction = null;
+  modal('approvalModal', false);
+  modal('userInputModal', false);
+  await bridge.appServer.respond({ requestId: request.requestId, result });
+}
+
+byId('acceptApproval').addEventListener('click', async () => {
+  if (!pendingInteraction) return;
+  const session = byId('approvalSessionScope').checked;
+  if (pendingInteraction.method === 'item/permissions/requestApproval') {
+    const requested = pendingInteraction.params.permissions || {};
+    await respondToInteraction({ permissions: { ...(requested.network ? { network: requested.network } : {}), ...(requested.fileSystem ? { fileSystem: requested.fileSystem } : {}) }, scope: session ? 'session' : 'turn' });
+  } else await respondToInteraction({ decision: session ? 'acceptForSession' : 'accept' });
+});
+byId('declineApproval').addEventListener('click', async () => {
+  if (!pendingInteraction) return;
+  if (pendingInteraction.method === 'item/permissions/requestApproval') await respondToInteraction({ permissions: {}, scope: 'turn' });
+  else await respondToInteraction({ decision: 'decline' });
+});
+byId('submitUserInput').addEventListener('click', async () => {
+  const answers = {};
+  byId('userInputQuestions').querySelectorAll('[data-question]').forEach(fieldset => {
+    const customAnswer = fieldset.querySelector('[data-custom-answer]')?.value.trim();
+    const selectedAnswer = fieldset.querySelector('select')?.value;
+    const answer = customAnswer || selectedAnswer;
+    answers[fieldset.dataset.question] = { answers: answer ? [answer] : [] };
+  });
+  await respondToInteraction({ answers });
+});
+byId('cancelUserInput').addEventListener('click', () => respondToInteraction({ answers: {} }));
+
+async function startAppServerTurn(prompt, context = {}) {
+  if (!currentThreadId) {
+    const response = await bridge.appServer.startThread({ model: byId('modelPicker').value, workspace: currentWorkspace, approvalPolicy: 'on-request' });
+    currentThread = response.thread;
+    currentThreadId = response.thread.id;
+  }
+  prepareConversation(prompt, true);
+  collabAgents.clear();
+  renderAgentGraph();
+  document.querySelector('.composer').classList.add('busy');
+  byId('interruptTurn').classList.remove('hide');
+  appServerTurnContext = { prompt, context, hasImages: selectedImages.length > 0 };
+  const response = await bridge.appServer.startTurn({ threadId: currentThreadId, input: buildTurnInput(prompt), model: byId('modelPicker').value, workspace: currentWorkspace, webSearch: webEnabled, multiAgentMode: byId('multiAgentMode').value, source: context.source || 'chat' });
+  currentTurnId = response.turn.id;
+  selectedImages = [];
+  renderAttachmentPreview();
+}
+
+async function runAgentFallback(prompt, context = {}) {
+  activeRequestId = crypto.randomUUID();
+  const requestId = activeRequestId;
+  prepareConversation(prompt, true);
+  document.querySelector('.composer').classList.add('busy');
+  try {
+    await bridge.agent.start({
+      requestId,
+      prompt,
+      model: byId('modelPicker').value,
+      workspace: currentWorkspace,
+      webSearch: webEnabled,
+      source: context.source || 'chat',
+      title: context.title || prompt.slice(0, 40)
+    });
+  } catch (error) {
+    if (activeRequestId !== requestId) return;
+    activeRequestId = null;
+    toastMsg('Codex Agent 不兼容当前接口，已回退到普通流式对话');
+    try {
+      await runDirectChat(prompt, context);
+    } catch (fallbackError) {
+      byId('thinking').textContent = cleanError(fallbackError);
+      byId('thinking').classList.add('stream-error');
+      finishRequest();
+    }
+  }
 }
 
 function handleAgentEvent(event) {
@@ -213,7 +457,17 @@ async function runDirectChat(prompt, context = {}) {
 async function sendPrompt(options = {}) {
   const context = options?.source ? options : {};
   const value = byId('prompt').value.trim();
-  if (!value) return;
+  if (!value && !selectedImages.length) return;
+  if (currentTurnId) {
+    try {
+      await bridge.appServer.steerTurn({ threadId: currentThreadId, turnId: currentTurnId, input: buildTurnInput(value) });
+      byId('prompt').value = '';
+      selectedImages = [];
+      renderAttachmentPreview();
+      toastMsg('补充要求已发送给当前 Agent');
+    } catch (error) { toastMsg(cleanError(error)); }
+    return;
+  }
   if (activeRequestId && bridge) {
     await Promise.allSettled([bridge.agent.cancel(activeRequestId), bridge.chat.cancel(activeRequestId)]);
     return;
@@ -225,33 +479,25 @@ async function sendPrompt(options = {}) {
     toastMsg('请先连接 API Key，再执行真实任务');
     return;
   }
-  activeRequestId = crypto.randomUUID();
-  const requestId = activeRequestId;
-  prepareConversation(value, true);
-  document.querySelector('.composer').classList.add('busy');
   try {
     if (!codexStatus.available) throw new Error(codexStatus.error || 'Codex 引擎不可用。');
-    await bridge.agent.start({
-      requestId,
-      prompt: value,
-      model: byId('modelPicker').value,
-      workspace: currentWorkspace,
-      webSearch: webEnabled,
-      source: context.source || 'chat',
-      title: context.title || value.slice(0, 40)
-    });
-  } catch (error) {
-    if (activeRequestId !== requestId) return;
-    activeRequestId = null;
-    toastMsg('Codex Agent 不兼容当前接口，已回退到普通流式对话');
-    try {
-      await runDirectChat(value, context);
-    } catch (fallbackError) {
-      byId('thinking').textContent = cleanError(fallbackError);
-      byId('thinking').classList.add('stream-error');
+    await startAppServerTurn(value, context);
+    return;
+  } catch (appServerError) {
+    appServerTurnContext = null;
+    currentThreadId = null;
+    currentThread = null;
+    currentTurnId = null;
+    byId('interruptTurn').classList.add('hide');
+    if (selectedImages.length) {
+      byId('prompt').value = value;
+      toastMsg('当前接口不兼容 app-server，图片附件无法使用：' + cleanError(appServerError));
       finishRequest();
+      return;
     }
+    toastMsg('app-server 不兼容当前接口，已回退到 Codex exec');
   }
+  await runAgentFallback(value, context);
 }
 
 byId('send').addEventListener('click', sendPrompt);
@@ -265,6 +511,27 @@ document.querySelectorAll('[data-prompt]').forEach(button => button.addEventList
   byId('prompt').value = button.dataset.prompt;
   sendPrompt();
 }));
+
+function renderAttachmentPreview() {
+  const preview = byId('attachmentPreview');
+  preview.classList.toggle('hide', selectedImages.length === 0);
+  preview.innerHTML = selectedImages.map((path, index) => '<span title="' + escapeHtml(path) + '">▧ ' + escapeHtml(path.split(/[\\/]/).pop()) + '<button data-remove-image="' + index + '">×</button></span>').join('');
+}
+
+byId('attachImages').addEventListener('click', async () => {
+  const images = await bridge.images.choose();
+  selectedImages = [...new Set([...selectedImages, ...images])].slice(0, 10);
+  renderAttachmentPreview();
+});
+byId('attachmentPreview').addEventListener('click', event => {
+  const index = Number(event.target.closest('[data-remove-image]')?.dataset.removeImage);
+  if (Number.isInteger(index)) { selectedImages.splice(index, 1); renderAttachmentPreview(); }
+});
+byId('interruptTurn').addEventListener('click', async () => {
+  if (!currentThreadId || !currentTurnId) return;
+  await bridge.appServer.interruptTurn({ threadId: currentThreadId, turnId: currentTurnId });
+  toastMsg('正在停止当前执行');
+});
 
 byId('webToggle').addEventListener('click', () => {
   webEnabled = !webEnabled;
@@ -623,6 +890,109 @@ byId('modelPicker').addEventListener('change', async () => {
   }
 });
 
+function cleanThreadPrompt(value) {
+  return String(value || '').replace(/^用户问题：\s*/i, '').replace(/<web_search_results>[\s\S]*?<\/web_search_results>/gi, '').trim();
+}
+
+function threadInputText(content = []) {
+  return cleanThreadPrompt(content.map(item => item.type === 'text' ? item.text : item.type === 'localImage' ? '[图片] ' + item.path.split(/[\\/]/).pop() : item.type === 'image' ? '[网络图片]' : '').filter(Boolean).join('\n'));
+}
+
+function renderCodexThread(thread) {
+  currentThread = thread;
+  currentThreadId = thread.id;
+  const turns = thread.turns || [];
+  const latest = [...turns].reverse().find(turn => turn.items?.length) || null;
+  lastTurnId = latest?.id || null;
+  const userItem = latest?.items?.filter(item => item.type === 'userMessage').at(-1);
+  const agentItems = latest?.items?.filter(item => item.type === 'agentMessage') || [];
+  const prompt = userItem ? threadInputText(userItem.content) : thread.preview || thread.name || '恢复的 Codex 会话';
+  prepareConversation(prompt, false);
+  const previousTurns = turns.filter(turn => turn !== latest && turn.items?.length);
+  byId('threadHistory').innerHTML = previousTurns.map(turn => {
+    const userText = turn.items.filter(item => item.type === 'userMessage').map(item => threadInputText(item.content)).filter(Boolean).join('\n\n');
+    const agentText = turn.items.filter(item => item.type === 'agentMessage').map(item => item.text).filter(Boolean).join('\n\n');
+    return (userText ? '<div class="msg history-msg"><i class="user">WK</i><div><small>你</small><p>' + escapeHtml(userText).replace(/\n/g, '<br>') + '</p></div></div>' : '') + (agentText ? '<div class="msg history-msg"><i class="ai">✦</i><div class="agent-response"><small>Codex Flow</small><div class="markdown-body">' + markdownHtml(agentText) + '</div></div></div>' : '');
+  }).join('');
+  secureMarkdownLinks(byId('threadHistory'));
+  byId('agentState').textContent = 'Codex Flow · 已恢复 · ' + (thread.name || thread.id.slice(0, 8));
+  byId('thinking').classList.add('hide');
+  const answer = agentItems.map(item => item.text).filter(Boolean).join('\n\n');
+  renderMarkdown(answer || '该会话已恢复，可以继续输入新的问题。');
+  latest?.items?.filter(item => !['userMessage', 'agentMessage', 'reasoning'].includes(item.type)).forEach(item => {
+    addToolEvent({ itemType: item.type, text: appServerItemDescription(item), status: 'completed' });
+    updateCollabItem(item);
+  });
+}
+
+async function loadCodexSessions() {
+  if (!bridge?.appServer || !publicConfig.configured) return;
+  try {
+    const response = await bridge.appServer.listThreads({ limit: 60, archived: byId('showArchivedSessions')?.checked, searchTerm: byId('sessionSearch')?.value.trim() || '' });
+    codexThreads = response.data || [];
+    byId('codexSessionsList').innerHTML = codexThreads.length ? codexThreads.map(thread => {
+      const preview = cleanThreadPrompt(thread.preview) || '暂无预览';
+      const title = cleanThreadPrompt(thread.name) || preview || '未命名会话';
+      return '<article data-thread="' + thread.id + '"><span><b>' + escapeHtml(title.slice(0, 80)) + '</b><small>' + new Date(thread.updatedAt * 1000).toLocaleString('zh-CN') + ' · ' + escapeHtml(thread.modelProvider || '-') + (thread.forkedFromId ? ' · 已分叉' : '') + '</small><p>' + escapeHtml(preview.slice(0, 180)) + '</p></span><button data-session-action="resume">恢复</button><button data-session-action="fork">分叉</button><button data-session-action="' + (byId('showArchivedSessions')?.checked ? 'unarchive' : 'archive') + '">' + (byId('showArchivedSessions')?.checked ? '取消归档' : '归档') + '</button></article>';
+    }).join('') : '<p>当前范围没有 Codex 会话。</p>';
+  } catch (error) {
+    byId('codexSessionsList').innerHTML = '<p>' + escapeHtml(cleanError(error)) + '</p>';
+  }
+}
+
+async function openCodexSessions() {
+  modal('codexSessionsModal');
+  await loadCodexSessions();
+}
+
+async function resumeCodexThread(threadId) {
+  const response = await bridge.appServer.resumeThread({ threadId, model: byId('modelPicker').value, workspace: currentWorkspace, approvalPolicy: 'on-request' });
+  renderCodexThread(response.thread);
+  modal('codexSessionsModal', false);
+  page('chat');
+  toastMsg('Codex 会话已恢复');
+}
+
+async function forkCodexThread(threadId, turnId = null) {
+  const response = await bridge.appServer.forkThread({ threadId, lastTurnId: turnId, model: byId('modelPicker').value, workspace: currentWorkspace, approvalPolicy: 'on-request' });
+  renderCodexThread(response.thread);
+  modal('codexSessionsModal', false);
+  page('chat');
+  toastMsg('已创建分叉会话');
+}
+
+byId('openCodexSessions').addEventListener('click', openCodexSessions);
+document.querySelector('.session-quick').addEventListener('click', openCodexSessions);
+byId('refreshCodexSessions').addEventListener('click', loadCodexSessions);
+byId('showArchivedSessions').addEventListener('change', loadCodexSessions);
+byId('sessionSearch').addEventListener('input', () => { clearTimeout(loadCodexSessions.timer); loadCodexSessions.timer = setTimeout(loadCodexSessions, 250); });
+byId('codexSessionsList').addEventListener('click', async event => {
+  const article = event.target.closest('[data-thread]');
+  const action = event.target.closest('[data-session-action]')?.dataset.sessionAction;
+  if (!article || !action) return;
+  const threadId = article.dataset.thread;
+  try {
+    if (action === 'resume') await resumeCodexThread(threadId);
+    if (action === 'fork') await forkCodexThread(threadId);
+    if (action === 'archive') { await bridge.appServer.archiveThread(threadId); await loadCodexSessions(); }
+    if (action === 'unarchive') { await bridge.appServer.unarchiveThread(threadId); await loadCodexSessions(); }
+  } catch (error) { toastMsg(cleanError(error)); }
+});
+byId('forkCurrentThread').addEventListener('click', async () => { if (currentThreadId) await forkCodexThread(currentThreadId, lastTurnId); else toastMsg('当前不是 app-server 会话'); });
+byId('archiveCurrentThread').addEventListener('click', async () => {
+  if (!currentThreadId) return toastMsg('当前不是 app-server 会话');
+  await bridge.appServer.archiveThread(currentThreadId);
+  currentThreadId = null; currentThread = null; lastTurnId = null;
+  byId('hero').classList.remove('hide'); byId('conversation').classList.add('hide');
+  toastMsg('当前会话已归档');
+});
+document.querySelector('.new').addEventListener('click', () => {
+  currentThreadId = null; currentThread = null; currentTurnId = null; lastTurnId = null;
+  collabAgents.clear(); renderAgentGraph();
+  byId('hero').classList.remove('hide'); byId('conversation').classList.add('hide');
+  byId('prompt').value = ''; selectedImages = []; renderAttachmentPreview();
+});
+
 
 async function loadHistory() {
   if (!bridge) return;
@@ -731,6 +1101,12 @@ async function initialize() {
   removeAgentListener = bridge.agent.onEvent(handleAgentEvent);
   removeTaskListener = bridge.tasks.onChanged(loadTasks);
   removeChatListener = bridge.chat.onEvent(handleChatEvent);
+  removeAppServerEventListener = bridge.appServer.onEvent(handleAppServerEvent);
+  removeAppServerRequestListener = bridge.appServer.onRequest(handleAppServerRequest);
+  removeAppServerStatusListener = bridge.appServer.onStatus(status => {
+    if (status.type === 'ready') document.querySelector('.connection').title = 'Codex app-server 已连接';
+    if (status.type === 'stopped') document.querySelector('.connection').title = 'Codex app-server 已停止，将在下次请求时重启';
+  });
   try {
     const [config, plans, status] = await Promise.all([bridge.config.getPublic(), bridge.codingPlans.list(), bridge.agent.status()]);
     publicConfig = config;
@@ -745,6 +1121,7 @@ async function initialize() {
     }
     applyConfig();
     await loadUsage('month');
+    if (publicConfig.configured) bridge.appServer.status().catch(() => {});
     if (publicConfig.configured) modal('welcome', false);
     if (!codexStatus.available) toastMsg('Codex 引擎不可用，将使用普通流式对话');
   } catch (error) {
@@ -756,6 +1133,9 @@ window.addEventListener('beforeunload', () => {
   removeAgentListener?.();
   removeChatListener?.();
   removeTaskListener?.();
+  removeAppServerEventListener?.();
+  removeAppServerRequestListener?.();
+  removeAppServerStatusListener?.();
 });
 document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
