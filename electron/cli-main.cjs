@@ -2,6 +2,7 @@ const readline = require('node:readline');
 const { app } = require('electron');
 const { ConfigStore } = require('./services/config-store.cjs');
 const { UsageStore } = require('./services/usage-store.cjs');
+const { TaskStore } = require('./services/task-store.cjs');
 const { discoverModels, streamChat } = require('./services/openai-client.cjs');
 const { CODING_PLANS, getCodingPlan, normalizeCodingPlanModels, chooseCodingPlanModel } = require('./services/coding-plans.cjs');
 
@@ -26,6 +27,10 @@ ${accent('Codex Flow')} - 简单的多模型终端 AI 客户端
   codex-flow model <模型 ID>       切换当前模型
   codex-flow chat [提示词]         单次提问或进入持续对话
   codex-flow usage [范围]          查看 Token 用量（day/month/year/all）
+  codex-flow schedule list            查看本地定时任务
+  codex-flow schedule create [...]    创建本地定时任务
+  codex-flow schedule toggle <ID>      启用或暂停任务
+  codex-flow schedule remove <ID>      删除本地定时任务
   codex-flow logout                清除本地 API 配置
   codex-flow help                  显示帮助
 
@@ -295,11 +300,19 @@ async function interactiveChat(configStore, usageStore) {
   rl.close();
 }
 
+
+function printSchedules(taskStore) {
+  const tasks = taskStore.list();
+  if (!tasks.length) return console.log(warning('还没有定时任务，请在桌面端创建。'));
+  for (const task of tasks) console.log((task.enabled ? success('●') : muted('○')) + ' ' + task.id + '  ' + task.name + '  ' + new Date(task.nextRunAt).toLocaleString('zh-CN'));
+}
+
 async function main() {
   await app.whenReady();
   const configStore = new ConfigStore(app.getPath('userData'));
   const usageStore = new UsageStore(app.getPath('userData'));
-  await Promise.all([configStore.load(), usageStore.load()]);
+  const taskStore = new TaskStore(app.getPath('userData'));
+  await Promise.all([configStore.load(), usageStore.load(), taskStore.load()]);
 
   const [command = 'help', ...args] = process.argv.slice(2);
   switch (command) {
@@ -325,6 +338,30 @@ async function main() {
       const range = args[0] || 'month';
       if (!['day', 'month', 'year', 'all'].includes(range)) throw new Error('用量范围仅支持 day、month、year 或 all。');
       printUsage(usageStore.summary(range));
+      break;
+    }
+    case 'schedule': {
+      const action = args[0] || 'list';
+      if (action === 'list') printSchedules(taskStore);
+      else if (action === 'toggle') { const task = taskStore.list().find(item => item.id === args[1]); if (!task) throw new Error('任务不存在。'); await taskStore.toggle(task.id, !task.enabled); printSchedules(taskStore); }
+      else if (action === 'remove') { if (!args[1]) throw new Error('请提供任务 ID。'); await taskStore.remove(args[1]); printSchedules(taskStore); }
+      else if (action === 'create') {
+        const options = parseOptions(args.slice(1));
+        if (!options.name || !options.prompt) throw new Error('创建任务需要 --name 和 --prompt。');
+        const type = options.type || 'daily';
+        if (!['daily', 'hourly', 'weekly'].includes(type)) throw new Error('--type 仅支持 daily、hourly 或 weekly。');
+        await taskStore.save({
+          name: options.name,
+          prompt: options.prompt,
+          schedule: { type, time: options.time || '08:00:00', timesPerHour: Math.max(1, Math.min(60, Number(options.times || 1))), dayOfWeek: options.weekday === undefined ? 1 : Number(options.weekday) },
+          model: options.model || configStore.publicConfig().provider?.model,
+          workspace: options.workspace || process.cwd(),
+          webSearch: options.web !== 'false',
+          enabled: true
+        });
+        printSchedules(taskStore);
+      }
+      else throw new Error('schedule 仅支持 list、create、toggle <ID> 或 remove <ID>。');
       break;
     }
     case 'logout':

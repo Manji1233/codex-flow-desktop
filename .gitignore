@@ -13,6 +13,8 @@ release/
 !.env.example
 codex-flow-config.json
 codex-flow-usage.json
+codex-flow-tasks.json
+codex-flow-content.json
 **/codex-flow-config.json
 **/codex-flow-usage.json
 credentials*.json

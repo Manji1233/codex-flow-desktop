@@ -39,6 +39,19 @@ contextBridge.exposeInMainWorld('codex', {
     cancel: requestId => ipcRenderer.invoke('chat:cancel', requestId),
     onEvent: callback => eventSubscription('chat:event', callback)
   },
+  tasks: {
+    list: () => ipcRenderer.invoke('tasks:list'),
+    summary: () => ipcRenderer.invoke('tasks:summary'),
+    save: payload => ipcRenderer.invoke('tasks:save', payload),
+    toggle: (id, enabled) => ipcRenderer.invoke('tasks:toggle', id, enabled),
+    remove: id => ipcRenderer.invoke('tasks:remove', id),
+    run: id => ipcRenderer.invoke('tasks:run', id),
+    onChanged: callback => eventSubscription('tasks:changed', callback)
+  },
+  history: { list: limit => ipcRenderer.invoke('history:list', limit) },
+  prompts: { list: () => ipcRenderer.invoke('prompts:list'), save: payload => ipcRenderer.invoke('prompts:save', payload), remove: id => ipcRenderer.invoke('prompts:remove', id) },
+  conversation: { export: payload => ipcRenderer.invoke('conversation:export', payload) },
+  media: { choose: () => ipcRenderer.invoke('media:choose') },
   usage: {
     summary: range => ipcRenderer.invoke('usage:summary', range),
     list: limit => ipcRenderer.invoke('usage:list', limit)

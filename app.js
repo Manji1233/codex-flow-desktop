@@ -45,6 +45,13 @@ let answerMarkdown = '';
 let extensions = { plugins: [], mcpServers: [] };
 let extensionFilter = 'all';
 let codexStatus = { available: false };
+let selectedMedia = [];
+let usageRecords = [];
+let removeTaskListener = null;
+let taskFilter = 'all';
+let historySessions = [];
+let savedPrompts = [];
+let activeUsageRange = 'month';
 
 function cleanError(error) {
   return String(error?.message || error || '操作失败').replace(/^Error invoking remote method '[^']+': Error:\s*/, '');
@@ -61,6 +68,10 @@ function page(id) {
   byId('title').textContent = meta[id][0];
   byId('subtitle').textContent = meta[id][1];
   if (id === 'plugins') loadExtensions();
+  if (id === 'tasks') loadTasks();
+  if (id === 'cli') loadCliStatus();
+  if (id === 'usage') loadUsage('month');
+  if (id === 'video') loadVideoProjects();
 }
 
 document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => page(button.dataset.page)));
@@ -137,6 +148,7 @@ function finishRequest() {
   byId('thinking').classList.add('hide');
   byId('agentState').textContent = 'Codex Flow · 已完成';
   loadUsage('month');
+  loadHistory();
 }
 
 function handleAgentEvent(event) {
@@ -185,18 +197,21 @@ function handleChatEvent(event) {
   }
 }
 
-async function runDirectChat(prompt) {
+async function runDirectChat(prompt, context = {}) {
   activeRequestId = crypto.randomUUID();
   prepareConversation(prompt, false);
   document.querySelector('.composer').classList.add('busy');
   await bridge.chat.start({
     requestId: activeRequestId,
     model: byId('modelPicker').value,
-    messages: [{ role: 'user', content: prompt }]
+    messages: [{ role: 'user', content: prompt }],
+    source: context.source || 'chat',
+    title: context.title || prompt.slice(0, 40)
   });
 }
 
-async function sendPrompt() {
+async function sendPrompt(options = {}) {
+  const context = options?.source ? options : {};
   const value = byId('prompt').value.trim();
   if (!value) return;
   if (activeRequestId && bridge) {
@@ -205,11 +220,9 @@ async function sendPrompt() {
   }
   byId('prompt').value = '';
   if (!bridge || !publicConfig.configured) {
-    prepareConversation(value, false);
-    setTimeout(() => {
-      renderMarkdown('## 演示模式\n\n连接 API Key 后，可使用真实 Codex Agent、联网搜索、Skills、MCP 和插件。');
-      finishRequest();
-    }, 600);
+    byId('prompt').value = value;
+    modal('welcome');
+    toastMsg('请先连接 API Key，再执行真实任务');
     return;
   }
   activeRequestId = crypto.randomUUID();
@@ -223,14 +236,16 @@ async function sendPrompt() {
       prompt: value,
       model: byId('modelPicker').value,
       workspace: currentWorkspace,
-      webSearch: webEnabled
+      webSearch: webEnabled,
+      source: context.source || 'chat',
+      title: context.title || value.slice(0, 40)
     });
   } catch (error) {
     if (activeRequestId !== requestId) return;
     activeRequestId = null;
     toastMsg('Codex Agent 不兼容当前接口，已回退到普通流式对话');
     try {
-      await runDirectChat(value);
+      await runDirectChat(value, context);
     } catch (fallbackError) {
       byId('thinking').textContent = cleanError(fallbackError);
       byId('thinking').classList.add('stream-error');
@@ -259,6 +274,10 @@ byId('webToggle').addEventListener('click', () => {
 });
 byId('contextWebToggle')?.addEventListener('click', () => byId('webToggle').click());
 byId('openTools').addEventListener('click', () => page('plugins'));
+document.querySelectorAll('.context .cap .toggle')[1]?.addEventListener('click', () => page('plugins'));
+document.querySelectorAll('.context .cap .toggle')[2]?.addEventListener('click', () => byId('chooseWorkspace').click());
+document.querySelector('.context-title button')?.addEventListener('click', () => document.querySelector('.context').classList.toggle('hide'));
+document.querySelector('.safe-banner button')?.addEventListener('click', () => toastMsg('API Key 使用 Electron safeStorage 加密，仅请求对应厂商时解密使用'));
 byId('chooseWorkspace').addEventListener('click', async () => {
   const selected = await bridge?.workspace.choose();
   if (!selected) return;
@@ -279,15 +298,33 @@ byId('exportAnswer').addEventListener('click', () => {
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 });
-byId('answerSchedule')?.addEventListener('click', () => modal('taskModal'));
+byId('answerSchedule')?.addEventListener('click', () => {
+  byId('taskPrompt').value = byId('userText').textContent || '';
+  byId('taskName').value = (byId('userText').textContent || '新任务').slice(0, 20);
+  byId('newTask').click();
+});
 
-function renderTasks() {
-  const tasks = [
-    ['◉', '每日 AI 行业资讯', '每天 08:00:00', 'GPT-5.4', true],
-    ['▤', '项目进度周报', '每周五 18:00:00', 'GLM-5.2', true],
-    ['⌕', '竞品价格监控', '每小时 2 次', 'Doubao Seed Code', false]
-  ];
-  byId('taskList').innerHTML = tasks.map(task => '<div class="task-row"><i>' + task[0] + '</i><span><b>' + task[1] + '</b><p>' + task[2] + ' · ' + task[3] + '</p></span><small>下次执行：本地计划</small><button class="toggle ' + (task[4] ? 'on' : '') + '"><i></i></button><em>•••</em></div>').join('');
+function taskScheduleLabel(task) {
+  if (task.schedule.type === 'hourly') return '每小时 ' + (task.schedule.timesPerHour || 1) + ' 次';
+  if (task.schedule.type === 'weekly') {
+    const weekdays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+    return '每周' + weekdays[Number(task.schedule.dayOfWeek || 0)] + ' · ' + task.schedule.time;
+  }
+  return '每天 · ' + task.schedule.time;
+}
+
+async function loadTasks() {
+  if (!bridge) return;
+  const [tasks, summary] = await Promise.all([bridge.tasks.list(), bridge.tasks.summary()]);
+  byId('taskRunning').textContent = summary.running;
+  byId('taskMonthly').textContent = summary.monthlyRuns;
+  byId('taskSuccess').textContent = summary.monthlyRuns ? '成功率 ' + Math.round(summary.successes / summary.monthlyRuns * 100) + '%' : '等待执行';
+  byId('taskNextTime').textContent = summary.next ? new Date(summary.next.nextRunAt).toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--';
+  byId('taskNextName').textContent = summary.next?.name || '暂无任务';
+  byId('taskBadge').textContent = summary.running;
+  byId('taskBadge').classList.toggle('hide', summary.running === 0);
+  const filtered = tasks.filter(task => taskFilter === 'all' || (taskFilter === 'enabled' ? task.enabled : !task.enabled));
+  byId('taskList').innerHTML = filtered.length ? filtered.map(task => '<div class="task-row" data-id="' + task.id + '"><i>◷</i><span><b>' + escapeHtml(task.name) + '</b><p>' + escapeHtml(taskScheduleLabel(task)) + ' · ' + escapeHtml(task.model || '-') + '</p></span><small>下次：' + new Date(task.nextRunAt).toLocaleString('zh-CN') + '<br>' + escapeHtml(task.lastStatus || 'pending') + '</small><button class="toggle task-toggle ' + (task.enabled ? 'on' : '') + '" title="暂停或启用"><i></i></button><button class="task-run">运行</button><button class="task-delete">删除</button></div>').join('') : '<div class="empty-extensions">当前筛选下没有定时任务。</div>';
 }
 
 function renderProviders() {
@@ -303,21 +340,42 @@ function renderProviders() {
 
 async function loadUsage(range) {
   if (!bridge) return;
-  const [summary, records] = await Promise.all([bridge.usage.summary(range), bridge.usage.list(20)]);
+  activeUsageRange = range;
+  const [summary, records] = await Promise.all([bridge.usage.summary(range), bridge.usage.list(100)]);
+  const now = new Date();
+  usageRecords = records.filter(record => {
+    const date = new Date(record.createdAt);
+    if (range === 'day') return date.toDateString() === now.toDateString();
+    if (range === 'month') return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+    if (range === 'year') return date.getFullYear() === now.getFullYear();
+    return true;
+  });
   byId('requests').textContent = Number(summary.requests).toLocaleString('zh-CN');
   byId('totalToken').textContent = Number(summary.totalTokens).toLocaleString('zh-CN');
   byId('totalCost').textContent = '¥' + Number(summary.estimatedCost || 0).toFixed(2);
-  const max = Math.max(1, ...records.map(record => Number(record.totalTokens || 0)));
-  byId('bars').innerHTML = records.length ? records.slice(0, 14).reverse().map(record => '<i style="height:' + Math.max(8, Math.round(Number(record.totalTokens || 0) / max * 100)) + '%" title="' + Number(record.totalTokens || 0).toLocaleString('zh-CN') + ' tokens"></i>').join('') : '<i style="height:8%"></i>';
-  const rows = document.querySelector('.table-card tbody');
-  if (rows) rows.innerHTML = records.slice(0, 8).map(record => '<tr><td>' + new Date(record.createdAt).toLocaleString('zh-CN') + '</td><td>' + escapeHtml(record.modelId || '-') + '</td><td>' + Number(record.inputTokens || 0).toLocaleString('zh-CN') + '</td><td>' + Number(record.outputTokens || 0).toLocaleString('zh-CN') + '</td><td>' + Number(record.totalTokens || 0).toLocaleString('zh-CN') + '</td><td>¥0.00</td></tr>').join('');
+  const visibleRecords = usageRecords.slice(0, 14).reverse();
+  const max = Math.max(1, ...visibleRecords.map(record => Number(record.totalTokens || 0)));
+  byId('bars').innerHTML = visibleRecords.length ? visibleRecords.map(record => '<i style="height:' + Math.max(8, Math.round(Number(record.totalTokens || 0) / max * 100)) + '%" title="' + Number(record.totalTokens || 0).toLocaleString('zh-CN') + ' tokens"></i>').join('') : '<i style="height:8%"></i>';
+  byId('usageAxis').textContent = visibleRecords.length ? visibleRecords.map(record => new Date(record.createdAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })).join('　') : '暂无记录';
+  const rangeLabels = { day: '今日', month: now.getFullYear() + '年' + (now.getMonth() + 1) + '月', year: now.getFullYear() + '年', all: '全部历史' };
+  byId('usageRangeLabel').textContent = rangeLabels[range];
+  byId('donutTotal').textContent = Number(summary.totalTokens).toLocaleString('zh-CN');
+  byId('recentModel').textContent = usageRecords[0]?.modelId || '--';
+  const totals = new Map(); usageRecords.forEach(record => totals.set(record.modelId || '未知模型', (totals.get(record.modelId || '未知模型') || 0) + Number(record.totalTokens || 0)));
+  const total = [...totals.values()].reduce((sum, value) => sum + value, 0) || 1;
+  const modelTotals = [...totals.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
+  byId('modelShares').innerHTML = modelTotals.map(([model,value]) => '<p><i></i>' + escapeHtml(model) + ' <b>' + Math.round(value / total * 100) + '%</b></p>').join('') || '<p>暂无记录</p>';
+  const colors = ['#8fbd4f', '#7482ef', '#f0a657', '#a0a6b5', '#d4d7df'];
+  let offset = 0;
+  const segments = modelTotals.map(([, value], index) => { const start = offset; offset += value / total * 100; return colors[index] + ' ' + start.toFixed(2) + '% ' + offset.toFixed(2) + '%'; });
+  document.querySelector('.donut').style.background = segments.length ? 'conic-gradient(' + segments.join(',') + ')' : '#e2e5eb';
+  byId('usageRows').innerHTML = usageRecords.length ? usageRecords.slice(0, 20).map(record => '<tr><td>' + new Date(record.createdAt).toLocaleString('zh-CN') + '</td><td>' + escapeHtml(record.modelId || '-') + '</td><td>' + Number(record.inputTokens || 0).toLocaleString('zh-CN') + '</td><td>' + Number(record.outputTokens || 0).toLocaleString('zh-CN') + '</td><td>' + Number(record.totalTokens || 0).toLocaleString('zh-CN') + '</td><td><b>成功</b></td></tr>').join('') : '<tr><td colspan="6">当前范围暂无请求记录</td></tr>';
 }
 
 document.querySelectorAll('.ranges button').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.ranges button').forEach(item => item.classList.remove('active'));
   button.classList.add('active');
-  const map = { '今日': 'day', '本月': 'month', '今年': 'year', '全部': 'all' };
-  loadUsage(map[button.textContent.trim()] || 'month');
+  loadUsage(button.dataset.range || 'month');
 }));
 
 function extensionIcon(name) {
@@ -422,19 +480,43 @@ byId('saveMcp').addEventListener('click', async () => {
   }
 });
 
-byId('newTask').addEventListener('click', () => modal('taskModal'));
-byId('saveTask').addEventListener('click', () => {
-  modal('taskModal', false);
-  toastMsg('定时任务“' + byId('taskName').value + '”已创建');
+function updateTaskScheduleFields() {
+  const frequency = byId('taskFrequency').value;
+  byId('taskTimeField').classList.toggle('hide', frequency === 'hourly');
+  byId('taskHourlyField').classList.toggle('hide', frequency !== 'hourly');
+  byId('taskWeekdayField').classList.toggle('hide', frequency !== 'weekly');
+}
+
+byId('newTask').addEventListener('click', () => {
+  if (!publicConfig.configured) return modal('welcome');
+  byId('taskModel').innerHTML = byId('modelPicker').innerHTML;
+  byId('taskModel').value = byId('modelPicker').value;
+  updateTaskScheduleFields();
+  modal('taskModal');
 });
+byId('taskFrequency').addEventListener('change', updateTaskScheduleFields);
+document.querySelector('.close-task').addEventListener('click', () => modal('taskModal', false));
+byId('saveTask').addEventListener('click', async () => {
+  const frequency = byId('taskFrequency').value;
+  const name = byId('taskName').value.trim();
+  const prompt = byId('taskPrompt').value.trim();
+  if (!name || !prompt) return toastMsg('请填写任务名称和执行提示词');
+  const timesPerHour = Math.max(1, Math.min(60, Number(byId('taskTimesPerHour').value) || 1));
+  await bridge.tasks.save({ name, prompt, schedule: { type: frequency, time: byId('taskTime').value || '08:00:00', timesPerHour, dayOfWeek: Number(byId('taskWeekday').value) }, model: byId('taskModel').value, workspace: currentWorkspace, webSearch: webEnabled, enabled: true });
+  modal('taskModal', false); await loadTasks(); toastMsg('定时任务已创建并开始本地调度');
+});
+byId('taskList').addEventListener('click', async event => { const row = event.target.closest('[data-id]'); if (!row) return; const id = row.dataset.id; if (event.target.closest('.task-toggle')) await bridge.tasks.toggle(id, !event.target.closest('.task-toggle').classList.contains('on')); if (event.target.closest('.task-run')) { await bridge.tasks.run(id); toastMsg('任务已开始执行'); } if (event.target.closest('.task-delete')) await bridge.tasks.remove(id); await loadTasks(); });
+byId('taskFilters').addEventListener('click', event => {
+  const button = event.target.closest('[data-task-filter]');
+  if (!button) return;
+  taskFilter = button.dataset.taskFilter;
+  byId('taskFilters').querySelectorAll('button').forEach(item => item.classList.toggle('active', item === button));
+  loadTasks();
+});
+byId('refreshTasks').addEventListener('click', loadTasks);
 byId('showKey').addEventListener('click', () => {
   byId('apiKey').type = byId('apiKey').type === 'password' ? 'text' : 'password';
 });
-byId('demo').addEventListener('click', () => {
-  modal('welcome', false);
-  toastMsg('已进入演示模式，连接 API Key 后可使用 Codex Agent');
-});
-
 async function connectOnboarding() {
   const button = byId('connect');
   const selected = document.querySelector('.choices button.active');
@@ -473,7 +555,8 @@ document.addEventListener('click', event => {
     byId('providerModelId').value = codingPlanPresets[providerButton.dataset.name]?.model || '';
     modal('providerModal');
   }
-  if (event.target.closest('.demo-action') || event.target.closest('.quick')) toastMsg('演示操作已执行');
+  if (event.target.closest('.quick')) handleQuickAction(event.target.closest('.quick'));
+  const template = event.target.closest('.video-template'); if (template) { byId('videoPrompt').value = template.closest('article').querySelector('b').textContent + '：' + byId('videoPrompt').value; toastMsg('模板已应用'); }
 });
 
 document.querySelectorAll('.choices button').forEach(button => button.addEventListener('click', () => {
@@ -530,7 +613,7 @@ function applyConfig() {
   if (publicConfig.provider?.model) picker.value = publicConfig.provider.model;
   const connection = document.querySelector('.connection');
   const engine = codexStatus.available ? 'Codex Agent ' + codexStatus.version.replace('codex-cli ', '') : '普通对话模式';
-  connection.innerHTML = '<i></i>' + (publicConfig.configured ? engine : '演示模式');
+  connection.innerHTML = '<i></i>' + (publicConfig.configured ? engine : '未连接 API');
 }
 
 byId('modelPicker').addEventListener('change', async () => {
@@ -540,11 +623,113 @@ byId('modelPicker').addEventListener('change', async () => {
   }
 });
 
+
+async function loadHistory() {
+  if (!bridge) return;
+  historySessions = await bridge.history.list(100);
+  const recent = historySessions.slice(0, 8);
+  byId('recentSessions').innerHTML = recent.length ? recent.map(session => '<button data-session="' + session.id + '"><i class="' + (session.source === 'video' ? 'orange' : session.source === 'schedule' ? 'green' : 'violet') + '"></i>' + escapeHtml(session.title || session.prompt.slice(0,24)) + '<small>' + new Date(session.createdAt).toLocaleString('zh-CN', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) + '</small></button>').join('') : '<small>暂无历史任务</small>';
+}
+
+function openSession(session) {
+  if (!session) return;
+  page('chat');
+  prepareConversation(session.prompt, false);
+  byId('agentState').textContent = 'Codex Flow · 历史结果 · ' + (session.model || '未知模型');
+  byId('thinking').classList.add('hide');
+  renderMarkdown(session.response || '该历史任务没有保存文本结果。');
+  modal('promptLibraryModal', false);
+  modal('videoProjectsModal', false);
+}
+
+byId('recentSessions').addEventListener('click', event => openSession(historySessions.find(session => session.id === event.target.closest('[data-session]')?.dataset.session)));
+
+async function loadPromptLibrary() {
+  if (!bridge) return;
+  [savedPrompts, historySessions] = await Promise.all([bridge.prompts.list(), bridge.history.list(100)]);
+  const promptCards = savedPrompts.map(prompt => '<article><span><b>' + escapeHtml(prompt.title) + '</b><small>' + new Date(prompt.createdAt).toLocaleString('zh-CN') + '</small><p>' + escapeHtml(prompt.content) + '</p></span><button data-use-prompt="' + prompt.id + '">使用</button><button class="danger" data-delete-prompt="' + prompt.id + '">删除</button></article>');
+  const sessionCards = historySessions.slice(0, 12).map(session => '<article><span><b>' + escapeHtml(session.title) + '</b><small>' + escapeHtml(session.source || 'chat') + ' · ' + new Date(session.createdAt).toLocaleString('zh-CN') + '</small><p>' + escapeHtml(session.prompt) + '</p></span><button data-open-session="' + session.id + '">打开</button></article>');
+  byId('promptLibraryList').innerHTML = '<h3>已保存提示词</h3>' + (promptCards.join('') || '<p>暂无保存的提示词</p>') + '<h3>最近会话</h3>' + (sessionCards.join('') || '<p>暂无会话</p>');
+}
+
+async function openPromptLibrary() {
+  await loadPromptLibrary();
+  modal('promptLibraryModal');
+}
+
+byId('openPromptLibrary').addEventListener('click', openPromptLibrary);
+byId('headerSearch').addEventListener('click', openPromptLibrary);
+byId('headerTasks').addEventListener('click', () => page('tasks'));
+byId('promptLibraryList').addEventListener('click', async event => {
+  const useId = event.target.closest('[data-use-prompt]')?.dataset.usePrompt;
+  const sessionId = event.target.closest('[data-open-session]')?.dataset.openSession;
+  const deleteId = event.target.closest('[data-delete-prompt]')?.dataset.deletePrompt;
+  if (useId) {
+    const prompt = savedPrompts.find(item => item.id === useId);
+    if (prompt) { modal('promptLibraryModal', false); page('chat'); byId('prompt').value = prompt.content; byId('prompt').focus(); }
+  }
+  if (sessionId) openSession(historySessions.find(session => session.id === sessionId));
+  if (deleteId) { await bridge.prompts.remove(deleteId); await loadPromptLibrary(); toastMsg('提示词已删除'); }
+});
+
+async function handleQuickAction(button) {
+  const text = button.textContent;
+  if (text.includes('定时任务')) { byId('taskPrompt').value = byId('userText').textContent || byId('prompt').value; byId('taskName').value = (byId('userText').textContent || '新任务').slice(0,20); byId('newTask').click(); }
+  if (text.includes('保存为提示词')) { await bridge.prompts.save({ content: byId('userText').textContent || byId('prompt').value, title: (byId('userText').textContent || '提示词').slice(0,30) }); toastMsg('提示词已保存到本地'); }
+  if (text.includes('分享')) { const file = await bridge.conversation.export({ title: (byId('userText').textContent || '会话').slice(0,30), content: '# ' + (byId('userText').textContent || 'Codex Flow 会话') + '\n\n' + answerMarkdown }); if (file) toastMsg('会话已导出：' + file); }
+}
+
+byId('exportUsage').addEventListener('click', () => { const rows = ['时间,模型,输入Token,输出Token,总Token', ...usageRecords.map(r => [new Date(r.createdAt).toISOString(), r.modelId, r.inputTokens, r.outputTokens, r.totalTokens].map(v => '"' + String(v ?? '').replaceAll('"','""') + '"').join(','))]; const blob = new Blob(['\ufeff' + rows.join('\n')], { type:'text/csv;charset=utf-8' }); const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download='codex-flow-usage.csv'; link.click(); setTimeout(()=>URL.revokeObjectURL(link.href),1000); });
+
+byId('selectMedia').addEventListener('click', async () => { selectedMedia = await bridge.media.choose(); byId('mediaStatus').textContent = selectedMedia.length ? '已选择 ' + selectedMedia.length + ' 个素材：' + selectedMedia.map(path => path.split(/[\\/]/).pop()).join('、') : '未选择素材'; });
+document.querySelectorAll('.video-option').forEach(button => button.addEventListener('click', () => {
+  button.classList.toggle('active');
+  const option = button.dataset.videoOption;
+  const prompt = byId('videoPrompt');
+  if (button.classList.contains('active') && !prompt.value.includes(option)) prompt.value += '\n' + option + '。';
+}));
+byId('startVideo').addEventListener('click', async () => {
+  if (!publicConfig.configured) return modal('welcome');
+  if (!selectedMedia.length) return toastMsg('请先选择视频、图片或音频素材');
+  try { await bridge.extensions.install('remotion@openai-api-curated'); } catch (error) { toastMsg('Remotion 插件未自动安装，Agent 将尝试使用现有视频工具'); }
+  currentWorkspace = selectedMedia[0].replace(/[\\/][^\\/]+$/, '');
+  const title = '视频项目 · ' + new Date().toLocaleString('zh-CN');
+  page('chat');
+  byId('prompt').value = '请使用 Remotion、FFmpeg 或已安装的视频工具处理以下本地素材：\n' + selectedMedia.join('\n') + '\n\n剪辑要求：' + byId('videoPrompt').value + '\n请实际生成可播放视频文件，并在最终回答中明确输出路径、分辨率、时长和执行结果。';
+  sendPrompt({ source: 'video', title });
+});
+
+async function loadVideoProjects() {
+  if (!bridge) return;
+  historySessions = await bridge.history.list(100);
+  const projects = historySessions.filter(session => session.source === 'video');
+  byId('videoProjectsList').innerHTML = projects.length ? projects.map(session => '<article><span><b>' + escapeHtml(session.title) + '</b><small>' + new Date(session.createdAt).toLocaleString('zh-CN') + ' · ' + escapeHtml(session.model || '-') + '</small><p>' + escapeHtml(session.prompt.slice(0, 180)) + '</p></span><button data-video-session="' + session.id + '">查看结果</button></article>').join('') : '<p>还没有视频项目。选择素材并开始智能剪辑后，项目会自动保存在这里。</p>';
+}
+byId('openVideoProjects').addEventListener('click', async () => { await loadVideoProjects(); modal('videoProjectsModal'); });
+byId('videoProjectsList').addEventListener('click', event => openSession(historySessions.find(session => session.id === event.target.closest('[data-video-session]')?.dataset.videoSession)));
+
+async function loadCliStatus() { if (!bridge) return; const [status, tasks, ext] = await Promise.all([bridge.agent.status(), bridge.tasks.summary(), bridge.extensions.list()]); byId('cliStatus').textContent = status.available ? status.version + ' · 可用' : 'Codex CLI 不可用'; byId('cliOutput').textContent = 'PS> codex-flow.cmd status\n' + (status.available ? '✓ ' + status.version : '✕ ' + (status.error || 'Codex CLI 不可用')) + '\n✓ 当前模型：' + (publicConfig.provider?.model || '未配置') + '\n✓ ' + ext.plugins.filter(p=>p.installed).length + ' 个插件已安装\n✓ ' + ext.mcpServers.filter(m=>m.enabled).length + ' 个 MCP 已启用\n✓ ' + tasks.running + ' 个定时任务运行中'; }
+const cliGuides = {
+  setup: 'npm.cmd install\nnpm.cmd link\ncodex-flow login\ncodex-flow status',
+  chat: 'codex-flow chat\ncodex-flow chat "分析当前目录并给出修改建议"',
+  schedule: 'codex-flow schedule list\ncodex-flow schedule toggle <任务ID>',
+  models: 'codex-flow models\ncodex-flow model <模型ID>',
+  extensions: 'codex plugin list --available\ncodex mcp list'
+};
+document.querySelectorAll('.cli-guide').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('.cli-guide').forEach(item => item.classList.toggle('active', item === button));
+  byId('cliOutput').textContent = 'PS> ' + cliGuides[button.dataset.cliSection].replaceAll('\n', '\nPS> ');
+}));
+byId('copyInstall').addEventListener('click', async () => { await navigator.clipboard.writeText('npm.cmd install && npm.cmd link'); toastMsg('安装命令已复制'); });
+document.querySelectorAll('.copy-command').forEach(button => button.addEventListener('click', async () => { await navigator.clipboard.writeText(button.closest('p').querySelector('code').textContent); toastMsg('命令已复制'); }));
+
 async function initialize() {
-  renderTasks();
+  loadTasks();
+  loadHistory();
   renderProviders();
   if (!bridge) return;
   removeAgentListener = bridge.agent.onEvent(handleAgentEvent);
+  removeTaskListener = bridge.tasks.onChanged(loadTasks);
   removeChatListener = bridge.chat.onEvent(handleChatEvent);
   try {
     const [config, plans, status] = await Promise.all([bridge.config.getPublic(), bridge.codingPlans.list(), bridge.agent.status()]);
@@ -570,6 +755,7 @@ async function initialize() {
 window.addEventListener('beforeunload', () => {
   removeAgentListener?.();
   removeChatListener?.();
+  removeTaskListener?.();
 });
 document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
@@ -577,7 +763,9 @@ document.addEventListener('keydown', event => {
     page('chat');
     byId('prompt').focus();
   }
-  if (event.key === 'Escape') document.querySelectorAll('.modal.show').forEach(element => element.classList.remove('show'));
+  if (event.key === 'Escape') document.querySelectorAll('.modal.show').forEach(element => {
+    if (element.id !== 'welcome' || publicConfig.configured) element.classList.remove('show');
+  });
 });
 
 initialize();

@@ -1,18 +1,33 @@
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, Notification } = require('electron');
 const { ConfigStore } = require('./services/config-store.cjs');
 const { UsageStore } = require('./services/usage-store.cjs');
 const { discoverModels, streamChat } = require('./services/openai-client.cjs');
 const { CODING_PLANS, getCodingPlan, normalizeCodingPlanModels, chooseCodingPlanModel } = require('./services/coding-plans.cjs');
 const { getStatus, listExtensions, installPlugin, removePlugin, addMcp, removeMcp, runAgent } = require('./services/codex-cli-service.cjs');
 const { searchWeb, buildSearchContext } = require('./services/web-search-service.cjs');
+const { TaskStore } = require('./services/task-store.cjs');
+const { ContentStore } = require('./services/content-store.cjs');
 
 app.setName('codex-flow-desktop');
 
 let mainWindow;
 let configStore;
 let usageStore;
+let taskStore;
+let contentStore;
+let schedulerTimer;
 const activeRequests = new Map();
+let taskQueue = Promise.resolve();
+
+function withTaskStore(operation, reload = true) {
+  const next = taskQueue.then(async () => {
+    if (reload) await taskStore.load();
+    return operation();
+  });
+  taskQueue = next.catch(() => {});
+  return next;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -86,6 +101,39 @@ async function recordUsage({ requestId, provider, model, usage, estimated = fals
   });
 }
 
+
+async function executeBackgroundTask(task) {
+  const provider = configStore.getProviderWithSecret();
+  const model = task.model || provider.model;
+  let prompt = task.prompt;
+  let nativeSearch = false;
+  if (task.webSearch !== false) {
+    try { prompt = buildSearchContext(task.prompt, await searchWeb(task.prompt)); } catch { nativeSearch = true; }
+  }
+  const result = await runAgent({ provider, model, prompt, workspace: task.workspace || process.cwd(), webSearch: nativeSearch, onEvent: () => {} });
+  await recordUsage({ requestId: crypto.randomUUID(), provider, model, usage: result.usage });
+  await contentStore.addSession({ title: task.name, prompt: task.prompt, response: result.finalMessage, model, source: 'schedule' });
+  return result.finalMessage;
+}
+
+async function runTask(task) {
+  await withTaskStore(() => taskStore.markRunning(task.id));
+  mainWindow?.webContents.send('tasks:changed');
+  try {
+    const result = await executeBackgroundTask(task);
+    await withTaskStore(() => taskStore.complete(task.id, 'success', result));
+    if (Notification.isSupported()) new Notification({ title: task.name, body: '定时任务执行完成' }).show();
+  } catch (error) {
+    await withTaskStore(() => taskStore.complete(task.id, 'failed', error.message));
+  }
+  mainWindow?.webContents.send('tasks:changed');
+}
+
+async function checkScheduledTasks() {
+  const dueTasks = await withTaskStore(() => taskStore.due());
+  for (const task of dueTasks) runTask(task);
+}
+
 function registerIpc() {
   ipcMain.handle('config:get-public', () => configStore.publicConfig());
   ipcMain.handle('coding-plans:list', () => CODING_PLANS.map(plan => ({ id: plan.id, name: plan.name, baseUrl: plan.baseUrl, defaultModel: plan.defaultModel, models: plan.fallbackModels })));
@@ -103,6 +151,18 @@ function registerIpc() {
   });
   ipcMain.handle('usage:summary', (_event, range) => usageStore.summary(range));
   ipcMain.handle('usage:list', (_event, limit) => usageStore.list(limit));
+  ipcMain.handle('tasks:list', () => withTaskStore(() => taskStore.list()));
+  ipcMain.handle('tasks:summary', () => withTaskStore(() => taskStore.summary()));
+  ipcMain.handle('tasks:save', (_event, payload) => withTaskStore(() => taskStore.save(payload)));
+  ipcMain.handle('tasks:toggle', (_event, id, enabled) => withTaskStore(() => taskStore.toggle(id, enabled)));
+  ipcMain.handle('tasks:remove', (_event, id) => withTaskStore(() => taskStore.remove(id)));
+  ipcMain.handle('tasks:run', async (_event, id) => { const task = await withTaskStore(() => taskStore.list().find(item => item.id === id)); if (!task) throw new Error('任务不存在。'); runTask(task); return true; });
+  ipcMain.handle('history:list', (_event, limit) => contentStore.sessions(limit));
+  ipcMain.handle('prompts:list', () => contentStore.prompts());
+  ipcMain.handle('prompts:save', (_event, payload) => contentStore.savePrompt(payload));
+  ipcMain.handle('prompts:remove', (_event, id) => contentStore.removePrompt(id));
+  ipcMain.handle('conversation:export', async (_event, payload) => { const result = await dialog.showSaveDialog(mainWindow, { title: '导出对话', defaultPath: (payload.title || 'codex-flow-session') + '.md', filters: [{ name: 'Markdown', extensions: ['md'] }] }); if (result.canceled) return null; await require('node:fs/promises').writeFile(result.filePath, payload.content, 'utf8'); return result.filePath; });
+  ipcMain.handle('media:choose', async () => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile','multiSelections'], filters: [{ name: '媒体文件', extensions: ['mp4','mov','mkv','mp3','wav','png','jpg','jpeg','webp'] }] }); return result.canceled ? [] : result.filePaths; });
   ipcMain.handle('codex:status', () => getStatus());
   ipcMain.handle('extensions:list', () => listExtensions());
   ipcMain.handle('extensions:install', (_event, pluginId) => installPlugin(pluginId));
@@ -147,6 +207,7 @@ function registerIpc() {
         onEvent: data => event.sender.send('agent:event', { requestId, ...data })
       });
       const record = await recordUsage({ requestId, provider, model, usage: result.usage });
+      await contentStore.addSession({ title: payload.title || payload.prompt.slice(0, 40), prompt: payload.prompt, response: result.finalMessage, model, source: payload.source || 'chat' });
       event.sender.send('agent:event', { requestId, type: 'usage', record });
       event.sender.send('agent:event', { requestId, type: 'done' });
       return { requestId, record, message: result.finalMessage };
@@ -182,6 +243,8 @@ function registerIpc() {
         output_tokens: result.outputTokens,
         total_tokens: result.totalTokens
       }, estimated: result.estimated });
+      const prompt = payload.messages?.filter(message => message.role === 'user').at(-1)?.content || '对话';
+      await contentStore.addSession({ title: payload.title || prompt.slice(0, 40), prompt, response: result.output, model: payload.model || provider.model, source: payload.source || 'chat' });
       event.sender.send('chat:event', { requestId, type: 'usage', record });
       event.sender.send('chat:event', { requestId, type: 'done' });
       return { requestId, record };
@@ -204,7 +267,9 @@ function registerIpc() {
 app.whenReady().then(async () => {
   configStore = new ConfigStore(app.getPath('userData'));
   usageStore = new UsageStore(app.getPath('userData'));
-  await Promise.all([configStore.load(), usageStore.load()]);
+  taskStore = new TaskStore(app.getPath('userData'));
+  contentStore = new ContentStore(app.getPath('userData'));
+  await Promise.all([configStore.load(), usageStore.load(), taskStore.load(), contentStore.load()]);
   const currentConfig = configStore.publicConfig();
   const codingPlan = getCodingPlan(currentConfig.provider?.baseUrl);
   if (codingPlan) {
@@ -214,10 +279,14 @@ app.whenReady().then(async () => {
   }
   registerIpc();
   createWindow();
+  schedulerTimer = setInterval(checkScheduledTasks, 15000);
+  checkScheduledTasks();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
+
+app.on('before-quit', () => clearInterval(schedulerTimer));
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
