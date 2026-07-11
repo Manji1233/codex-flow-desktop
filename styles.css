@@ -55,3 +55,19 @@ main>header{background:#ffffffeb;border-bottom-color:#e1e3ea}.head-actions butto
 .plugin-head .plugin-icon{overflow:hidden}.plugin-head .plugin-icon.has-image{background:var(--plugin-brand,#f1f2f5);border:1px solid #e1e4ea;padding:5px}.plugin-head .plugin-icon img{display:block;width:100%;height:100%;object-fit:contain;border-radius:5px}
 .plugin-search-bar{display:flex;align-items:center;gap:8px;width:100%;height:42px;margin:14px 0 0;padding:0 13px;border:1px solid #dfe3eb;border-radius:10px;background:#fff;color:#777d88}.plugin-search-bar input{flex:1;border:0;outline:0;background:transparent;font-size:11px}.plugin-search-bar kbd{border:0;border-radius:5px;background:#eef0f5;color:#777d88;font-size:8px;padding:4px 6px}.market .plugin-search-bar{display:none}
 .session-list article{flex-wrap:wrap}.session-list article>span{flex-basis:420px}.session-list button.danger{color:#a23d3d;border-color:#e5c6c6}.answer-actions{flex-wrap:wrap}
+
+.developer-dialog{width:min(1050px,94vw)}
+.developer-toolbar,.terminal-toolbar{display:flex;align-items:center;gap:8px;padding:10px 18px;border-bottom:1px solid #e1e4eb}
+.developer-toolbar{justify-content:flex-end}
+.diff-view{margin:0;max-height:72vh;overflow:auto;padding:18px;background:#151719;color:#e7ece4;font:11px/1.65 "Cascadia Code",Consolas,monospace;white-space:pre;tab-size:2}
+.plan-view{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
+.plan-view article{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #e0e3ea;border-radius:10px;background:#fff}
+.plan-view article>i{width:28px;height:28px;display:grid;place-items:center;border-radius:8px;background:#eef0f5;color:#656c78;font-style:normal}
+.plan-view article.inProgress>i{background:#e8ebff;color:#4b5cc8}.plan-view article.completed>i{background:#e8f3df;color:#56852d}
+.plan-view b,.plan-view small{display:block}.plan-view small{margin-top:3px;color:#858a96;font-size:9px}
+.terminal-dialog{width:min(1100px,95vw)}
+.terminal-toolbar small{margin-left:auto;color:#858a96;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.terminal-output{height:58vh;margin:0;overflow:auto;padding:16px;background:#111315;color:#dbe5d7;font:12px/1.55 "Cascadia Code",Consolas,monospace;white-space:pre-wrap}
+.terminal-input{display:flex;align-items:center;gap:8px;padding:12px;background:#191c1e;color:#9fcf6a}
+.terminal-input input{flex:1;border:0;outline:0;background:transparent;color:#fff;font:12px "Cascadia Code",Consolas,monospace}
+.answer-actions button:disabled{opacity:.45;cursor:not-allowed}

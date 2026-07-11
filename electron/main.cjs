@@ -211,6 +211,27 @@ function registerIpc() {
   ipcMain.handle('app-server:thread-name-set', async (_event, payload) => { await ensureAppServer(); return appServer.request('thread/name/set', { threadId: payload.threadId, name: payload.name }); });
   ipcMain.handle('app-server:thread-compact', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/compact/start', { threadId }); });
   ipcMain.handle('app-server:review-start', async (_event, payload) => { await ensureAppServer(); return appServer.request('review/start', { threadId: payload.threadId, target: payload.target || { type: 'uncommittedChanges' }, delivery: payload.delivery || 'inline' }); });
+  ipcMain.handle('app-server:terminal-start', async (_event, payload = {}) => {
+    await ensureAppServer();
+    const processId = payload.processId || crypto.randomUUID();
+    appServer.request('command/exec', {
+      command: payload.command || ['powershell.exe', '-NoLogo'],
+      cwd: payload.cwd || process.cwd(),
+      processId,
+      tty: true,
+      streamStdin: true,
+      streamStdoutStderr: true,
+      disableTimeout: true,
+      disableOutputCap: true,
+      size: payload.size || { cols: 110, rows: 30 },
+      sandboxPolicy: { type: 'workspaceWrite', writableRoots: [payload.cwd || process.cwd()], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false }
+    }).then(result => sendToRenderer('app-server:event', { method: 'codex-flow/terminal-exit', params: { processId, result } }))
+      .catch(error => sendToRenderer('app-server:event', { method: 'codex-flow/terminal-exit', params: { processId, error: error.message } }));
+    return { processId };
+  });
+  ipcMain.handle('app-server:terminal-write', async (_event, payload) => { await ensureAppServer(); return appServer.request('command/exec/write', payload); });
+  ipcMain.handle('app-server:terminal-resize', async (_event, payload) => { await ensureAppServer(); return appServer.request('command/exec/resize', payload); });
+  ipcMain.handle('app-server:terminal-terminate', async (_event, processId) => { await ensureAppServer(); return appServer.request('command/exec/terminate', { processId }); });
   ipcMain.handle('app-server:turn-start', async (_event, payload) => {
     await ensureAppServer();
     const input = [...(payload.input || [])];

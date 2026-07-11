@@ -60,6 +60,11 @@ let selectedImages = [];
 let codexThreads = [];
 let pendingInteraction = null;
 let appServerTurnContext = null;
+let currentTurnDiff = '';
+let currentTurnPlan = [];
+let currentPlanExplanation = '';
+let terminalProcessId = null;
+let terminalOutput = '';
 let removeAppServerEventListener = null;
 let removeAppServerRequestListener = null;
 let removeAppServerStatusListener = null;
@@ -146,6 +151,10 @@ function prepareConversation(prompt, agentMode = true) {
   byId('answer').classList.add('hide');
   byId('answerActions')?.classList.add('hide');
   answerMarkdown = '';
+  currentTurnDiff = '';
+  currentTurnPlan = [];
+  currentPlanExplanation = '';
+  updateDeveloperActionState();
   byId('inToken').textContent = '0';
   byId('outToken').textContent = '0';
 }
@@ -194,12 +203,57 @@ function appServerItemDescription(item) {
 
 function ensureAdvancedThreadActions() {
   if (byId('reviewCurrentThread')) return;
-  byId('forkCurrentThread').insertAdjacentHTML('beforebegin', '<button id="reviewCurrentThread">代码审查</button><button id="compactCurrentThread">压缩上下文</button><button id="renameCurrentThread">重命名</button>');
+  byId('forkCurrentThread').insertAdjacentHTML('beforebegin', '<button id="viewTurnDiff" disabled>Diff</button><button id="viewTurnPlan" disabled>Plan</button><button id="reviewCurrentThread">代码审查</button><button id="compactCurrentThread">压缩上下文</button><button id="renameCurrentThread">重命名</button>');
   const sessionDescription = document.querySelector('#codexSessionsModal .dialog-head small');
   if (sessionDescription) sessionDescription.textContent = '恢复、分叉、命名、归档、压缩和删除 app-server 持久会话';
 }
 
 ensureAdvancedThreadActions();
+
+function ensureDeveloperPanels() {
+  if (byId('diffModal')) return;
+  document.body.insertAdjacentHTML('beforeend', '<div class="modal" id="diffModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>本轮文件改动</b><small id="diffSummary">等待 Codex 生成 Diff</small></span><button class="close" id="closeDiffModal">×</button></div><div class="developer-toolbar"><button class="outline" id="copyTurnDiff">复制 Diff</button></div><pre class="diff-view" id="turnDiffContent">当前轮次还没有文件改动。</pre></div></div><div class="modal" id="planModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>执行计划</b><small id="planExplanation">等待 Codex 更新计划</small></span><button class="close" id="closePlanModal">×</button></div><div class="dialog-body plan-view" id="turnPlanContent"></div></div></div><div class="modal" id="terminalModal"><div class="dialog terminal-dialog"><div class="dialog-head"><span><b>内置终端</b><small id="terminalState">尚未启动</small></span><button class="close" id="closeTerminalModal">×</button></div><div class="terminal-toolbar"><button class="primary" id="startTerminal">启动 PowerShell</button><button class="outline" id="stopTerminal">停止</button><button class="outline" id="clearTerminal">清屏</button><small id="terminalWorkspace"></small></div><pre id="terminalOutput" class="terminal-output">点击“启动 PowerShell”开始。</pre><form id="terminalForm" class="terminal-input"><span>&gt;</span><input id="terminalCommand" autocomplete="off" placeholder="输入命令并回车"><button class="primary">发送</button></form></div></div>');
+  byId('openTools').insertAdjacentHTML('beforebegin', '<button id="openTerminal" title="打开内置终端">›_ 终端</button>');
+  byId('closeDiffModal').addEventListener('click', () => modal('diffModal', false));
+  byId('closePlanModal').addEventListener('click', () => modal('planModal', false));
+  byId('closeTerminalModal').addEventListener('click', () => modal('terminalModal', false));
+}
+
+ensureDeveloperPanels();
+
+function updateDeveloperActionState() {
+  if (!byId('viewTurnDiff')) return;
+  const files = (currentTurnDiff.match(/^diff --git /gm) || []).length;
+  byId('viewTurnDiff').disabled = !currentTurnDiff;
+  byId('viewTurnDiff').textContent = currentTurnDiff ? 'Diff · ' + files + ' 文件' : 'Diff';
+  byId('viewTurnPlan').disabled = !currentTurnPlan.length;
+  byId('viewTurnPlan').textContent = currentTurnPlan.length ? 'Plan · ' + currentTurnPlan.filter(step => step.status === 'completed').length + '/' + currentTurnPlan.length : 'Plan';
+}
+
+function renderTurnDiff() {
+  const files = (currentTurnDiff.match(/^diff --git /gm) || []).length;
+  byId('diffSummary').textContent = currentTurnDiff ? files + ' 个文件 · ' + currentTurnDiff.split('\n').length + ' 行统一 Diff' : '当前轮次没有文件改动';
+  byId('turnDiffContent').textContent = currentTurnDiff || '当前轮次还没有文件改动。';
+}
+
+function renderTurnPlan() {
+  byId('planExplanation').textContent = currentPlanExplanation || (currentTurnPlan.length ? 'Codex 正在按计划执行' : '当前轮次没有计划');
+  byId('turnPlanContent').innerHTML = currentTurnPlan.length ? currentTurnPlan.map((item, index) => '<article class="' + escapeHtml(item.status) + '"><i>' + (item.status === 'completed' ? '✓' : item.status === 'inProgress' ? '●' : index + 1) + '</i><span><b>' + escapeHtml(item.step) + '</b><small>' + (item.status === 'completed' ? '已完成' : item.status === 'inProgress' ? '执行中' : '等待中') + '</small></span></article>').join('') : '<p>当前轮次没有计划。</p>';
+}
+
+function updateTerminalState() {
+  byId('terminalState').textContent = terminalProcessId ? 'PowerShell 运行中' : '终端已停止';
+  byId('startTerminal').disabled = Boolean(terminalProcessId);
+  byId('stopTerminal').disabled = !terminalProcessId;
+  byId('terminalCommand').disabled = !terminalProcessId;
+}
+
+function textToBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let binary = '';
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
 
 function renderAgentGraph() {
   const agents = [...collabAgents.entries()];
@@ -219,6 +273,33 @@ function updateCollabItem(item) {
 
 async function handleAppServerEvent(event) {
   const { method, params } = event;
+  if (method === 'command/exec/outputDelta' && params.processId === terminalProcessId) {
+    const bytes = Uint8Array.from(atob(params.deltaBase64 || ''), character => character.charCodeAt(0));
+    terminalOutput = (terminalOutput + new TextDecoder().decode(bytes)).slice(-120000);
+    byId('terminalOutput').textContent = terminalOutput;
+    byId('terminalOutput').scrollTop = byId('terminalOutput').scrollHeight;
+    return;
+  }
+  if (method === 'codex-flow/terminal-exit' && params.processId === terminalProcessId) {
+    terminalOutput += params.error ? '\n[终端错误] ' + params.error : '\n[进程已退出，代码 ' + (params.result?.exitCode ?? 0) + ']';
+    byId('terminalOutput').textContent = terminalOutput;
+    terminalProcessId = null;
+    updateTerminalState();
+    return;
+  }
+  if (method === 'turn/diff/updated' && params.threadId === currentThreadId) {
+    currentTurnDiff = params.diff || '';
+    updateDeveloperActionState();
+    if (byId('diffModal').classList.contains('show')) renderTurnDiff();
+    return;
+  }
+  if (method === 'turn/plan/updated' && params.threadId === currentThreadId) {
+    currentTurnPlan = params.plan || [];
+    currentPlanExplanation = params.explanation || '';
+    updateDeveloperActionState();
+    if (byId('planModal').classList.contains('show')) renderTurnPlan();
+    return;
+  }
   if (method === 'codex-flow/search') {
     addToolEvent({ itemType: 'webSearch', text: params.text, status: params.status });
     byId('thinking').textContent = params.text;
@@ -1022,6 +1103,58 @@ byId('reviewCurrentThread').addEventListener('click', async () => {
     finishRequest();
     toastMsg(cleanError(error));
   }
+});
+byId('viewTurnDiff').addEventListener('click', () => {
+  renderTurnDiff();
+  modal('diffModal');
+});
+byId('viewTurnPlan').addEventListener('click', () => {
+  renderTurnPlan();
+  modal('planModal');
+});
+byId('copyTurnDiff').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(currentTurnDiff);
+    toastMsg('Diff 已复制');
+  } catch (error) { toastMsg(cleanError(error)); }
+});
+byId('openTerminal').addEventListener('click', () => {
+  byId('terminalWorkspace').textContent = currentWorkspace || '项目目录';
+  updateTerminalState();
+  modal('terminalModal');
+});
+byId('startTerminal').addEventListener('click', async () => {
+  if (terminalProcessId) return;
+  terminalOutput = '';
+  byId('terminalOutput').textContent = '正在启动 PowerShell...\n';
+  terminalProcessId = crypto.randomUUID();
+  updateTerminalState();
+  try {
+    await bridge.appServer.startTerminal({ processId: terminalProcessId, cwd: currentWorkspace });
+  } catch (error) {
+    terminalOutput += '\n[启动失败] ' + cleanError(error);
+    byId('terminalOutput').textContent = terminalOutput;
+    terminalProcessId = null;
+    updateTerminalState();
+  }
+});
+byId('terminalForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  const command = byId('terminalCommand').value;
+  if (!terminalProcessId || !command) return;
+  byId('terminalCommand').value = '';
+  try {
+    await bridge.appServer.writeTerminal({ processId: terminalProcessId, deltaBase64: textToBase64(command + '\r\n') });
+  } catch (error) { toastMsg(cleanError(error)); }
+});
+byId('stopTerminal').addEventListener('click', async () => {
+  if (!terminalProcessId) return;
+  try { await bridge.appServer.terminateTerminal(terminalProcessId); }
+  catch (error) { toastMsg(cleanError(error)); }
+});
+byId('clearTerminal').addEventListener('click', () => {
+  terminalOutput = '';
+  byId('terminalOutput').textContent = '';
 });
 byId('compactCurrentThread').addEventListener('click', async () => {
   if (!currentThreadId) return toastMsg('请先开始或恢复一个 app-server 会话');

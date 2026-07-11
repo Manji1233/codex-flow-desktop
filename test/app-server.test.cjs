@@ -54,3 +54,14 @@ test('app-server serializes advanced thread and review requests', async () => {
     { id: '2', method: 'review/start', params: { threadId: 'thread-1', target: { type: 'uncommittedChanges' }, delivery: 'inline' } }
   ]);
 });
+
+test('app-server correlates streamed terminal output notifications', async () => {
+  const notifications = [];
+  const service = new AppServerService({ onNotification: notification => notifications.push(notification) });
+  service.child = { stdin: { writable: true, write() {} } };
+  service.consume('{"method":"command/exec/outputDelta","params":{"processId":"terminal-1","stream":"stdout","deltaBase64":"b2s=","capReached":false}}\n');
+  assert.deepEqual(notifications, [{
+    method: 'command/exec/outputDelta',
+    params: { processId: 'terminal-1', stream: 'stdout', deltaBase64: 'b2s=', capReached: false }
+  }]);
+});
