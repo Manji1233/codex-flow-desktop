@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 
@@ -65,7 +66,62 @@ function parseJson(text, fallback) {
   try { return JSON.parse(text); } catch { return fallback; }
 }
 
-function pluginSummary(plugin) {
+const ICON_MIME_TYPES = {
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif'
+};
+
+function pluginCacheRoot() {
+  return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'plugins', 'cache');
+}
+
+function pluginManifestPaths(plugin, cacheRoot = pluginCacheRoot()) {
+  const pluginDirectory = path.join(cacheRoot, plugin.marketplaceName || '', plugin.name || '');
+  if (!fs.existsSync(pluginDirectory)) return [];
+  const directManifest = path.join(pluginDirectory, '.codex-plugin', 'plugin.json');
+  const manifests = fs.existsSync(directManifest) ? [directManifest] : [];
+  for (const entry of fs.readdirSync(pluginDirectory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = path.join(pluginDirectory, entry.name, '.codex-plugin', 'plugin.json');
+    if (fs.existsSync(manifestPath)) manifests.push(manifestPath);
+  }
+  return manifests;
+}
+
+function pluginPresentation(plugin, cacheRoot) {
+  const candidates = pluginManifestPaths(plugin, cacheRoot).map(manifestPath => {
+    try {
+      return { manifestPath, manifest: JSON.parse(fs.readFileSync(manifestPath, 'utf8')) };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean).sort((left, right) => Number(right.manifest.version === plugin.version) - Number(left.manifest.version === plugin.version));
+  const selected = candidates[0];
+  if (!selected) return {};
+  const details = selected.manifest.interface || {};
+  const presentation = {
+    displayName: details.displayName || selected.manifest.name || plugin.name,
+    description: details.shortDescription || selected.manifest.description || '',
+    brandColor: /^#[0-9a-f]{3,8}$/i.test(details.brandColor || '') ? details.brandColor : ''
+  };
+  const iconReference = details.logo || details.composerIcon;
+  if (!iconReference) return presentation;
+  const pluginRoot = path.dirname(path.dirname(selected.manifestPath));
+  const iconPath = path.resolve(pluginRoot, iconReference);
+  const relativeIconPath = path.relative(pluginRoot, iconPath);
+  const mimeType = ICON_MIME_TYPES[path.extname(iconPath).toLowerCase()];
+  if (!mimeType || relativeIconPath.startsWith('..') || path.isAbsolute(relativeIconPath) || !fs.existsSync(iconPath)) return presentation;
+  const icon = fs.readFileSync(iconPath);
+  if (icon.length > 512 * 1024) return presentation;
+  presentation.iconDataUrl = 'data:' + mimeType + ';base64,' + icon.toString('base64');
+  return presentation;
+}
+
+function pluginSummary(plugin, cacheRoot) {
   return {
     id: plugin.pluginId,
     name: plugin.name,
@@ -73,7 +129,8 @@ function pluginSummary(plugin) {
     version: plugin.version || '',
     installed: Boolean(plugin.installed),
     enabled: Boolean(plugin.enabled),
-    authPolicy: plugin.authPolicy || 'ON_USE'
+    authPolicy: plugin.authPolicy || 'ON_USE',
+    ...pluginPresentation(plugin, cacheRoot)
   };
 }
 
@@ -94,7 +151,7 @@ async function listExtensions() {
   const plugins = parseJson(pluginOutput, { installed: [], available: [] });
   const mcpServers = parseJson(mcpOutput, []);
   return {
-    plugins: [...(plugins.installed || []), ...(plugins.available || [])].map(pluginSummary),
+    plugins: [...(plugins.installed || []), ...(plugins.available || [])].map(plugin => pluginSummary(plugin)),
     mcpServers: mcpServers.map(server => ({
       id: 'mcp:' + server.name,
       name: server.name,
@@ -232,5 +289,7 @@ module.exports = {
   addMcp,
   removeMcp,
   runAgent,
-  cleanCliError
+  cleanCliError,
+  pluginSummary,
+  pluginPresentation
 };

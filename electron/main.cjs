@@ -5,7 +5,7 @@ const { UsageStore } = require('./services/usage-store.cjs');
 const { discoverModels, streamChat } = require('./services/openai-client.cjs');
 const { CODING_PLANS, getCodingPlan, normalizeCodingPlanModels, chooseCodingPlanModel } = require('./services/coding-plans.cjs');
 const { getStatus, listExtensions, installPlugin, removePlugin, addMcp, removeMcp, runAgent } = require('./services/codex-cli-service.cjs');
-const { searchWeb, buildSearchContext } = require('./services/web-search-service.cjs');
+const { searchWeb, buildSearchContext, WEB_SEARCH_DEVELOPER_INSTRUCTIONS } = require('./services/web-search-service.cjs');
 const { TaskStore } = require('./services/task-store.cjs');
 const { ContentStore } = require('./services/content-store.cjs');
 const { AppServerService } = require('./services/app-server-service.cjs');
@@ -49,7 +49,8 @@ function interactiveThreadConfig(payload, provider) {
     cwd: payload.workspace || process.cwd(),
     runtimeWorkspaceRoots: payload.workspace ? [payload.workspace] : null,
     approvalPolicy: payload.approvalPolicy || 'on-request',
-    sandbox: payload.sandbox || 'workspace-write'
+    sandbox: payload.sandbox || 'workspace-write',
+    developerInstructions: WEB_SEARCH_DEVELOPER_INSTRUCTIONS
   };
 }
 
@@ -210,6 +211,7 @@ function registerIpc() {
     await ensureAppServer();
     const input = [...(payload.input || [])];
     const workspace = payload.workspace || process.cwd();
+    let additionalContext = payload.additionalContext || null;
     if (payload.webSearch !== false) {
       const textIndex = input.findIndex(item => item.type === 'text');
       if (textIndex >= 0) {
@@ -217,6 +219,10 @@ function registerIpc() {
         try {
           const results = await searchWeb(input[textIndex].text);
           input[textIndex] = { ...input[textIndex], text: buildSearchContext(input[textIndex].text, results) };
+          additionalContext = {
+            ...(additionalContext || {}),
+            'codex-flow-web-search': { kind: 'application', value: WEB_SEARCH_DEVELOPER_INSTRUCTIONS }
+          };
           sendToRenderer('app-server:event', { method: 'codex-flow/search', params: { status: 'completed', text: '已检索 ' + results.length + ' 个网络来源' } });
         } catch {
           sendToRenderer('app-server:event', { method: 'codex-flow/search', params: { status: 'completed', text: '客户端搜索不可用，继续使用 Codex 工具' } });
@@ -226,6 +232,7 @@ function registerIpc() {
     return appServer.request('turn/start', {
       threadId: payload.threadId,
       input,
+      additionalContext,
       cwd: workspace,
       runtimeWorkspaceRoots: [workspace],
       approvalPolicy: payload.approvalPolicy || 'on-request',
@@ -306,10 +313,23 @@ function registerIpc() {
     const controller = new AbortController();
     activeRequests.set(requestId, { cancel: () => controller.abort() });
     try {
+      const messages = (payload.messages || []).map(message => ({ ...message }));
+      const promptIndex = messages.findLastIndex(message => message.role === 'user');
+      const originalPrompt = promptIndex >= 0 ? messages[promptIndex].content : '对话';
+      if (payload.webSearch !== false && promptIndex >= 0 && typeof messages[promptIndex].content === 'string') {
+        event.sender.send('chat:event', { requestId, type: 'tool', status: 'running', itemType: 'web_search', text: '正在搜索实时网络信息' });
+        try {
+          const results = await searchWeb(messages[promptIndex].content);
+          messages[promptIndex].content = buildSearchContext(messages[promptIndex].content, results);
+          event.sender.send('chat:event', { requestId, type: 'tool', status: 'completed', itemType: 'web_search', text: '已检索 ' + results.length + ' 个网络来源' });
+        } catch (searchError) {
+          event.sender.send('chat:event', { requestId, type: 'tool', status: 'completed', itemType: 'web_search', text: '实时搜索失败：' + searchError.message });
+        }
+      }
       const result = await streamChat({
         provider,
         model: payload.model || provider.model,
-        messages: payload.messages,
+        messages,
         signal: controller.signal,
         onEvent: data => event.sender.send('chat:event', { requestId, ...data })
       });
@@ -318,8 +338,7 @@ function registerIpc() {
         output_tokens: result.outputTokens,
         total_tokens: result.totalTokens
       }, estimated: result.estimated });
-      const prompt = payload.messages?.filter(message => message.role === 'user').at(-1)?.content || '对话';
-      await contentStore.addSession({ title: payload.title || prompt.slice(0, 40), prompt, response: result.output, model: payload.model || provider.model, source: payload.source || 'chat' });
+      await contentStore.addSession({ title: payload.title || String(originalPrompt).slice(0, 40), prompt: originalPrompt, response: result.output, model: payload.model || provider.model, source: payload.source || 'chat' });
       event.sender.send('chat:event', { requestId, type: 'usage', record });
       event.sender.send('chat:event', { requestId, type: 'done' });
       return { requestId, record };

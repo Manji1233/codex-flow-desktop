@@ -424,6 +424,11 @@ function handleAgentEvent(event) {
 
 function handleChatEvent(event) {
   if (event.requestId !== activeRequestId) return;
+  if (event.type === 'tool') {
+    addToolEvent(event);
+    byId('thinking').textContent = event.text;
+    return;
+  }
   if (event.type === 'delta') {
     answerMarkdown += event.text;
     renderMarkdown(answerMarkdown);
@@ -449,6 +454,7 @@ async function runDirectChat(prompt, context = {}) {
     requestId: activeRequestId,
     model: byId('modelPicker').value,
     messages: [{ role: 'user', content: prompt }],
+    webSearch: webEnabled,
     source: context.source || 'chat',
     title: context.title || prompt.slice(0, 40)
   });
@@ -653,24 +659,31 @@ function extensionIcon(name) {
   return '⌘';
 }
 
+function pluginIconMarkup(plugin) {
+  if (!plugin.iconDataUrl) return '<i class="plugin-icon">' + extensionIcon(plugin.name) + '</i>';
+  const color = /^#[0-9a-f]{3,8}$/i.test(plugin.brandColor || '') ? plugin.brandColor : '#f1f2f5';
+  return '<i class="plugin-icon has-image" style="--plugin-brand:' + color + '"><img src="' + escapeHtml(plugin.iconDataUrl) + '" alt=""></i>';
+}
+
 function renderExtensions() {
   const query = byId('pluginSearch').value.trim().toLowerCase();
   const pluginCards = extensions.plugins.filter(plugin => {
     if (extensionFilter === 'installed' && !plugin.installed) return false;
     if (extensionFilter === 'mcp') return false;
-    return !query || (plugin.name + ' ' + plugin.marketplace).toLowerCase().includes(query);
+    return !query || (plugin.name + ' ' + (plugin.displayName || '') + ' ' + plugin.marketplace + ' ' + (plugin.description || '')).toLowerCase().includes(query);
   }).map(plugin => {
-    const description = pluginDescriptions[plugin.name] || '来自 ' + plugin.marketplace + ' 的 Codex 扩展，可为 Agent 增加专业工作流、工具或 Skills。';
+    const description = pluginDescriptions[plugin.name] || plugin.description || '来自 ' + plugin.marketplace + ' 的 Codex 扩展，可为 Agent 增加专业工作流、工具或 Skills。';
+    const displayName = plugin.displayName || plugin.name;
     const button = plugin.installed
       ? '<button class="installed extension-action" data-action="remove" data-id="' + plugin.id + '">✓ 已安装</button>'
       : '<button class="install extension-action" data-action="install" data-id="' + plugin.id + '">安装</button>';
-    return '<article class="plugin"><div class="plugin-head"><i>' + extensionIcon(plugin.name) + '</i>' + button + '</div><h3>' + escapeHtml(plugin.name) + '</h3><p>' + escapeHtml(description) + '</p><small>' + escapeHtml(plugin.marketplace) + (plugin.version ? ' · v' + escapeHtml(plugin.version) : '') + '</small></article>';
+    return '<article class="plugin"><div class="plugin-head">' + pluginIconMarkup(plugin) + button + '</div><h3>' + escapeHtml(displayName) + '</h3><p>' + escapeHtml(description) + '</p><small>' + escapeHtml(plugin.marketplace) + (plugin.version ? ' · v' + escapeHtml(plugin.version) : '') + '</small></article>';
   });
   const mcpCards = extensions.mcpServers.filter(server => {
     if (extensionFilter === 'plugin') return false;
     if (extensionFilter === 'installed' && !server.enabled) return false;
     return !query || server.name.toLowerCase().includes(query);
-  }).map(server => '<article class="plugin"><div class="plugin-head"><i>◆</i><button class="installed extension-action" data-action="remove-mcp" data-id="' + escapeHtml(server.name) + '">' + (server.enabled ? '✓ 已启用' : '已停用') + '</button></div><h3>' + escapeHtml(server.name) + '</h3><p>自定义 MCP 服务，通过 ' + escapeHtml(server.transport) + ' 向 Codex 提供实时工具和外部数据。</p><small>MCP · 授权状态 ' + escapeHtml(server.authStatus) + '</small></article>');
+  }).map(server => '<article class="plugin"><div class="plugin-head"><i class="plugin-icon">◆</i><button class="installed extension-action" data-action="remove-mcp" data-id="' + escapeHtml(server.name) + '">' + (server.enabled ? '✓ 已启用' : '已停用') + '</button></div><h3>' + escapeHtml(server.name) + '</h3><p>自定义 MCP 服务，通过 ' + escapeHtml(server.transport) + ' 向 Codex 提供实时工具和外部数据。</p><small>MCP · 授权状态 ' + escapeHtml(server.authStatus) + '</small></article>');
   const cards = extensionFilter === 'mcp' ? mcpCards : extensionFilter === 'plugin' ? pluginCards : [...pluginCards, ...mcpCards];
   byId('pluginGrid').innerHTML = cards.length ? cards.join('') : '<div class="empty-extensions">没有找到匹配的扩展。</div>';
 }
@@ -691,6 +704,9 @@ async function loadExtensions(force = false) {
   }
 }
 
+const pluginSearchLabel = byId('pluginSearch').closest('label');
+pluginSearchLabel.classList.add('plugin-search-bar');
+byId('extensionFilters').before(pluginSearchLabel);
 byId('pluginSearch').addEventListener('input', renderExtensions);
 byId('extensionFilters').addEventListener('click', event => {
   const button = event.target.closest('button[data-filter]');
