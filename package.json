@@ -1,17 +1,22 @@
 {
   "name": "codex-flow-desktop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
+  "author": "Manji1233",
   "description": "输入 API Key 即可使用的多模型桌面与终端 AI 客户端",
   "main": "electron/main.cjs",
   "scripts": {
     "start": "electron .",
-    "check": "node --check electron/main.cjs && node --check electron/cli-main.cjs && node --check electron/preload.cjs && node --check electron/services/config-store.cjs && node --check electron/services/openai-client.cjs && node --check electron/services/coding-plans.cjs && node --check electron/services/usage-store.cjs && node --check electron/services/codex-cli-service.cjs && node --check electron/services/app-server-service.cjs && node --check electron/services/web-search-service.cjs && node --check electron/services/task-store.cjs && node --check electron/services/content-store.cjs && node --check bin/codex-flow.cjs && node --check app.js",
+    "check": "node --check electron/main.cjs && node --check electron/cli-main.cjs && node --check electron/preload.cjs && node --check electron/services/config-store.cjs && node --check electron/services/openai-client.cjs && node --check electron/services/coding-plans.cjs && node --check electron/services/usage-store.cjs && node --check electron/services/codex-cli-service.cjs && node --check electron/services/app-server-service.cjs && node --check electron/services/web-search-service.cjs && node --check electron/services/task-store.cjs && node --check electron/services/content-store.cjs && node --check electron/services/data-protection-service.cjs && node --check electron/services/update-service.cjs && node --check bin/codex-flow.cjs && node --check app.js",
     "test": "node --test test/*.test.cjs",
-    "cli": "node bin/codex-flow.cjs"
+    "cli": "node bin/codex-flow.cjs",
+    "dist": "electron-builder --win nsis --x64",
+    "publish": "electron-builder --win nsis --x64 --publish always",
+    "release": "powershell -ExecutionPolicy Bypass -File scripts/publish-release.ps1"
   },
   "devDependencies": {
-    "electron": "^43.1.0"
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3"
   },
   "bin": {
     "codex-flow": "bin/codex-flow.cjs"
@@ -20,6 +25,53 @@
     "@openai/codex": "0.144.1",
     "cheerio": "^1.2.0",
     "dompurify": "^3.4.11",
+    "electron-updater": "^6.8.9",
     "marked": "^18.0.6"
+  },
+  "build": {
+    "appId": "com.manji.chatgptcodex",
+    "productName": "ChatGPT Codex",
+    "executableName": "chatgpt-codex",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!问题日志.md",
+      "!electron.log",
+      "!test/**",
+      "!.git/**",
+      "!dist/**"
+    ],
+    "asarUnpack": [
+      "node_modules/@openai/codex*/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "ChatGPT-Codex-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Manji1233",
+        "repo": "codex-flow-desktop",
+        "releaseType": "release"
+      }
+    ]
   }
 }

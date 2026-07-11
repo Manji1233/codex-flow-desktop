@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain, shell, dialog, Notification } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const { ConfigStore } = require('./services/config-store.cjs');
 const { UsageStore } = require('./services/usage-store.cjs');
 const { discoverModels, streamChat } = require('./services/openai-client.cjs');
@@ -9,6 +10,8 @@ const { searchWeb, buildSearchContext, WEB_SEARCH_DEVELOPER_INSTRUCTIONS } = req
 const { TaskStore } = require('./services/task-store.cjs');
 const { ContentStore } = require('./services/content-store.cjs');
 const { AppServerService } = require('./services/app-server-service.cjs');
+const { DataProtectionService } = require('./services/data-protection-service.cjs');
+const { UpdateService } = require('./services/update-service.cjs');
 
 app.setName('codex-flow-desktop');
 
@@ -18,6 +21,8 @@ let usageStore;
 let taskStore;
 let contentStore;
 let appServer;
+let dataProtection;
+let updateService;
 let schedulerTimer;
 const activeRequests = new Map();
 const appServerUsage = new Map();
@@ -198,6 +203,30 @@ async function checkScheduledTasks() {
 function registerIpc() {
   ipcMain.handle('config:get-public', () => configStore.publicConfig());
   ipcMain.handle('config:activate-mode', (_event, mode) => configStore.activateMode(mode));
+  ipcMain.handle('update:status', async () => { await updateService.refreshBackups(); return updateService.snapshot(); });
+  ipcMain.handle('update:check', () => updateService.check());
+  ipcMain.handle('update:download', () => updateService.download());
+  ipcMain.handle('update:install', async () => {
+    clearInterval(schedulerTimer);
+    for (const request of activeRequests.values()) request.cancel?.();
+    appServer?.stop();
+    return updateService.install();
+  });
+  ipcMain.handle('update:backups', () => dataProtection.listBackups());
+  ipcMain.handle('update:open-backups', async () => {
+    await require('node:fs/promises').mkdir(dataProtection.backupRoot, { recursive: true });
+    const error = await shell.openPath(dataProtection.backupRoot);
+    if (error) throw new Error(error);
+    return dataProtection.backupRoot;
+  });
+  ipcMain.handle('update:restore-backup', async (_event, id) => {
+    clearInterval(schedulerTimer);
+    for (const request of activeRequests.values()) request.cancel?.();
+    appServer?.stop();
+    const restored = await dataProtection.restoreBackup(id);
+    setTimeout(() => { app.relaunch(); app.exit(0); }, 500);
+    return restored;
+  });
   ipcMain.handle('coding-plans:list', () => CODING_PLANS.map(plan => ({ id: plan.id, name: plan.name, baseUrl: plan.baseUrl, defaultModel: plan.defaultModel, models: plan.fallbackModels })));
   ipcMain.handle('provider:save-and-discover', (_event, payload) => saveAndDiscoverProvider(payload));
   ipcMain.handle('provider:discover', async () => {
@@ -469,6 +498,11 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
+  dataProtection = new DataProtectionService(app.getPath('userData'), { appVersion: app.getVersion() });
+  let protectionError = null;
+  let startupBackup = null;
+  try { startupBackup = await dataProtection.protectVersion(app.getVersion()); }
+  catch (error) { protectionError = error.message; }
   configStore = new ConfigStore(app.getPath('userData'));
   usageStore = new UsageStore(app.getPath('userData'));
   taskStore = new TaskStore(app.getPath('userData'));
@@ -502,6 +536,10 @@ app.whenReady().then(async () => {
     },
     onStatus: status => sendToRenderer('app-server:status', status)
   });
+  updateService = new UpdateService({ app, autoUpdater, dataProtection, onChange: status => sendToRenderer('update:changed', status) });
+  updateService.initialize();
+  if (startupBackup) updateService.update({ latestBackup: startupBackup });
+  if (protectionError) updateService.update({ historyProtected: false, error: protectionError, message: '历史记录备份初始化失败' });
   const currentConfig = configStore.publicConfig();
   const codingPlan = getCodingPlan(currentConfig.provider?.baseUrl);
   if (codingPlan) {
@@ -511,6 +549,8 @@ app.whenReady().then(async () => {
   }
   registerIpc();
   createWindow();
+  updateService.refreshBackups().catch(() => {});
+  if (app.isPackaged) setTimeout(() => updateService.check().catch(() => {}), 10000);
   schedulerTimer = setInterval(checkScheduledTasks, 15000);
   checkScheduledTasks();
   app.on('activate', () => {
@@ -518,7 +558,7 @@ app.whenReady().then(async () => {
   });
 });
 
-app.on('before-quit', () => { clearInterval(schedulerTimer); appServer?.stop(); });
+app.on('before-quit', () => { clearInterval(schedulerTimer); updateService?.dispose(); appServer?.stop(); });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

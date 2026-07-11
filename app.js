@@ -69,9 +69,12 @@ let modelCatalog = [];
 let providerCapabilities = { webSearch: false, imageGeneration: false, namespaceTools: false };
 let chatGptSnapshot = null;
 let pendingChatGptLoginId = null;
+let clientUpdateStatus = null;
+let updateBackups = [];
 let removeAppServerEventListener = null;
 let removeAppServerRequestListener = null;
 let removeAppServerStatusListener = null;
+let removeUpdateListener = null;
 const collabAgents = new Map();
 
 function cleanError(error) {
@@ -230,10 +233,13 @@ function ensureLatestCodexPanels() {
   const modelControl = document.querySelector('.composer .model');
   modelControl?.insertAdjacentHTML('afterend', '<select id="reasoningEffort" class="model-capability hide" title="推理强度"></select><select id="personality" class="model-capability hide" title="回答风格"><option value="none">风格：默认</option><option value="friendly">风格：友好</option><option value="pragmatic">风格：务实</option></select><select id="serviceTier" class="model-capability hide" title="服务层级"></select>');
   document.querySelector('#models .heading')?.insertAdjacentHTML('beforeend', '<button class="outline" id="openRuntimeDiagnostics">引擎诊断</button>');
+  byId('openRuntimeDiagnostics')?.insertAdjacentHTML('afterend', '<button class="outline" id="openClientUpdate">客户端更新</button>');
   byId('providers')?.insertAdjacentHTML('beforebegin', '<section class="auth-mode-panel"><i>✦</i><span><b id="authModeName">API Key 模式（默认）</b><small id="authModeDescription">密钥由系统安全存储加密</small></span><em id="authModeStatus">正在读取</em><button class="outline" id="switchApiKeyMode">使用 API Key</button><button class="primary" id="openChatGptAccount">登录 ChatGPT（可选）</button></section>');
   byId('connect')?.insertAdjacentHTML('afterend', '<button class="chatgpt-secondary" id="welcomeChatGptLogin">或使用 ChatGPT 账户（可选）</button>');
   document.body.insertAdjacentHTML('beforeend', '<div class="modal" id="runtimeDiagnosticsModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>ChatGPT Codex 运行时诊断</b><small id="runtimeSummary">正在读取官方稳定版状态</small></span><button class="close" id="closeRuntimeDiagnostics">×</button></div><div class="dialog-body runtime-diagnostics"><div class="runtime-grid"><article><small>本机版本</small><b id="runtimeInstalled">--</b></article><article><small>官方稳定版</small><b id="runtimeLatest">--</b></article><article><small>协议</small><b id="runtimeProtocol">--</b></article><article><small>更新状态</small><b id="runtimeUpdateState">--</b></article></div><h3>当前模型能力</h3><div class="runtime-capabilities" id="modelCapabilities">等待模型目录</div><h3>已接入能力</h3><div class="runtime-capabilities" id="runtimeCapabilities"></div><p class="runtime-note" id="runtimeNote"></p></div><div class="dialog-foot"><button class="outline" id="refreshRuntimeDiagnostics">重新检测</button><button class="primary" id="closeRuntimeDiagnosticsFoot">完成</button></div></div></div><div class="modal" id="chatgptAccountModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>ChatGPT 账户（可选）</b><small id="chatgptAccountSummary">默认仍使用 API Key，可随时切换</small></span><button class="close" id="closeChatGptAccount">×</button></div><div class="dialog-body runtime-diagnostics"><div class="runtime-grid"><article><small>账户</small><b id="chatgptAccountEmail">未登录</b></article><article><small>套餐</small><b id="chatgptAccountPlan">--</b></article><article><small>短周期额度</small><b id="chatgptPrimaryLimit">--</b></article><article><small>长周期额度</small><b id="chatgptSecondaryLimit">--</b></article></div><h3>ChatGPT Codex 用量</h3><div class="runtime-capabilities" id="chatgptUsageSummary"><span>登录后显示账户用量</span></div><p class="runtime-note">登录令牌由官方 Codex 运行时保存在本机；本客户端不读取或保存 ChatGPT 密码。</p></div><div class="dialog-foot"><button class="outline" id="logoutChatGpt">退出 ChatGPT</button><button class="outline" id="refreshChatGptAccount">刷新状态</button><button class="primary" id="loginChatGpt">使用 ChatGPT 登录</button></div></div></div>');
+  document.body.insertAdjacentHTML('beforeend', '<div class="modal" id="clientUpdateModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>客户端更新</b><small id="clientUpdateSummary">检查 GitHub Release 更新</small></span><button class="close" id="closeClientUpdate">×</button></div><div class="dialog-body update-panel"><div class="runtime-grid"><article><small>当前版本</small><b id="clientCurrentVersion">--</b></article><article><small>可用版本</small><b id="clientAvailableVersion">--</b></article><article><small>更新状态</small><b id="clientUpdatePhase">--</b></article><article><small>最近备份</small><b id="clientBackupTime">--</b></article></div><div class="history-protection" id="historyProtection"><i>◆</i><span><b>历史记录更新保护</b><small>安装前自动备份 API 配置、Token 账本、定时任务、提示词与会话历史。</small></span></div><div class="update-progress"><i id="clientUpdateProgress"></i></div><small id="clientUpdateProgressText">等待检查更新</small><pre class="release-notes" id="clientReleaseNotes">暂无更新说明。</pre><div class="backup-actions"><select id="updateBackupPicker"><option value="">暂无本地备份</option></select><button class="outline" id="openUpdateBackups">打开备份目录</button><button class="outline" id="restoreUpdateBackup">恢复所选备份</button></div></div><div class="dialog-foot"><button class="outline" id="checkClientUpdate">检查更新</button><button class="outline" id="downloadClientUpdate">下载更新</button><button class="primary" id="installClientUpdate">备份并安装</button></div></div></div>');
   byId('openRuntimeDiagnostics').addEventListener('click', openRuntimeDiagnostics);
+  byId('openClientUpdate').addEventListener('click', openClientUpdate);
   byId('refreshRuntimeDiagnostics').addEventListener('click', refreshRuntimeDiagnostics);
   byId('closeRuntimeDiagnostics').addEventListener('click', () => modal('runtimeDiagnosticsModal', false));
   byId('closeRuntimeDiagnosticsFoot').addEventListener('click', () => modal('runtimeDiagnosticsModal', false));
@@ -243,6 +249,12 @@ function ensureLatestCodexPanels() {
   byId('loginChatGpt').addEventListener('click', startChatGptLogin);
   byId('refreshChatGptAccount').addEventListener('click', refreshChatGptAccount);
   byId('logoutChatGpt').addEventListener('click', logoutChatGpt);
+  byId('closeClientUpdate').addEventListener('click', () => modal('clientUpdateModal', false));
+  byId('checkClientUpdate').addEventListener('click', checkClientUpdate);
+  byId('downloadClientUpdate').addEventListener('click', downloadClientUpdate);
+  byId('installClientUpdate').addEventListener('click', installClientUpdate);
+  byId('openUpdateBackups').addEventListener('click', () => bridge.updates.openBackups().catch(error => toastMsg(cleanError(error))));
+  byId('restoreUpdateBackup').addEventListener('click', restoreUpdateBackup);
   byId('welcomeChatGptLogin').addEventListener('click', () => { renderChatGptAccount(); modal('chatgptAccountModal'); });
   document.querySelector('.connection')?.addEventListener('click', () => page('models'));
 }
@@ -312,6 +324,85 @@ async function refreshRuntimeDiagnostics() {
 async function openRuntimeDiagnostics() {
   modal('runtimeDiagnosticsModal');
   await refreshRuntimeDiagnostics();
+}
+
+function updatePhaseName(phase) {
+  return ({ idle: '等待检查', checking: '检查中', available: '发现新版本', current: '已是最新', unpublished: '等待首次发布', downloading: '下载中', downloaded: '等待安装', installing: '正在安装', error: '更新失败', unsupported: '开发模式' })[phase] || phase || '--';
+}
+
+function renderClientUpdate() {
+  if (!byId('clientUpdateModal') || !clientUpdateStatus) return;
+  const status = clientUpdateStatus;
+  const selectedBackup = byId('updateBackupPicker').value;
+  byId('clientCurrentVersion').textContent = status.currentVersion || '--';
+  byId('clientAvailableVersion').textContent = status.availableVersion || '未发现';
+  byId('clientUpdatePhase').textContent = updatePhaseName(status.phase);
+  byId('clientUpdateSummary').textContent = status.error ? status.message + '：' + status.error : status.message;
+  byId('clientBackupTime').textContent = status.latestBackup?.createdAt ? new Date(status.latestBackup.createdAt).toLocaleString('zh-CN') : updateBackups[0]?.createdAt ? new Date(updateBackups[0].createdAt).toLocaleString('zh-CN') : '尚无备份';
+  byId('clientUpdateProgress').style.width = Math.max(0, Math.min(100, Number(status.progress || 0))) + '%';
+  byId('clientUpdateProgressText').textContent = status.phase === 'downloading' ? status.message : status.message || '等待检查更新';
+  byId('clientReleaseNotes').textContent = status.releaseNotes || '暂无更新说明。';
+  byId('historyProtection').classList.toggle('warning', status.historyProtected === false);
+  byId('historyProtection').querySelector('small').textContent = status.historyProtected === false
+    ? '备份服务初始化失败，请先打开备份目录检查权限，再安装更新。'
+    : '安装前自动备份 API 配置、Token 账本、定时任务、提示词与会话历史。';
+  byId('updateBackupPicker').innerHTML = updateBackups.length
+    ? updateBackups.map(backup => '<option value="' + escapeHtml(backup.id) + '">' + escapeHtml(new Date(backup.createdAt).toLocaleString('zh-CN') + ' · ' + backup.reason) + '</option>').join('')
+    : '<option value="">暂无本地备份</option>';
+  if (updateBackups.some(backup => backup.id === selectedBackup)) byId('updateBackupPicker').value = selectedBackup;
+  byId('checkClientUpdate').disabled = !status.supported || ['checking', 'downloading', 'installing'].includes(status.phase);
+  byId('downloadClientUpdate').disabled = status.phase !== 'available';
+  byId('installClientUpdate').disabled = !status.downloaded || status.historyProtected === false;
+  byId('restoreUpdateBackup').disabled = !updateBackups.length;
+  byId('openClientUpdate').textContent = status.phase === 'available' || status.phase === 'downloaded' ? '客户端更新 · 新版本' : '客户端更新';
+}
+
+function handleClientUpdateChanged(status) {
+  const previousPhase = clientUpdateStatus?.phase;
+  clientUpdateStatus = status;
+  renderClientUpdate();
+  if (status.phase === 'available' && previousPhase !== 'available') toastMsg('发现客户端新版本 ' + status.availableVersion);
+  if (status.phase === 'downloaded' && previousPhase !== 'downloaded') toastMsg('更新已下载，安装前会自动备份历史记录');
+}
+
+async function loadClientUpdateStatus() {
+  if (!bridge?.updates) return;
+  const [status, backups] = await Promise.all([bridge.updates.status(), bridge.updates.backups()]);
+  clientUpdateStatus = status;
+  updateBackups = backups || [];
+  renderClientUpdate();
+}
+
+async function openClientUpdate() {
+  modal('clientUpdateModal');
+  try { await loadClientUpdateStatus(); }
+  catch (error) { toastMsg(cleanError(error)); }
+}
+
+async function checkClientUpdate() {
+  try { handleClientUpdateChanged(await bridge.updates.check()); }
+  catch (error) { toastMsg(cleanError(error)); }
+}
+
+async function downloadClientUpdate() {
+  try { handleClientUpdateChanged(await bridge.updates.download()); }
+  catch (error) { toastMsg(cleanError(error)); }
+}
+
+async function installClientUpdate() {
+  if (document.querySelector('.composer').classList.contains('busy')) return toastMsg('请先等待当前任务结束，再安装更新');
+  if (!confirm('安装前会在本机备份全部历史记录和配置，然后重启客户端。现在安装？')) return;
+  try { await bridge.updates.install(); }
+  catch (error) { toastMsg(cleanError(error)); }
+}
+
+async function restoreUpdateBackup() {
+  const id = byId('updateBackupPicker').value;
+  if (!id || !confirm('恢复所选备份会覆盖当前本地配置和历史记录，并自动重启客户端。是否继续？')) return;
+  try {
+    await bridge.updates.restoreBackup(id);
+    toastMsg('备份已恢复，客户端即将重启');
+  } catch (error) { toastMsg(cleanError(error)); }
 }
 
 function resetProviderThread() {
@@ -1564,6 +1655,7 @@ async function initialize() {
   removeChatListener = bridge.chat.onEvent(handleChatEvent);
   removeAppServerEventListener = bridge.appServer.onEvent(handleAppServerEvent);
   removeAppServerRequestListener = bridge.appServer.onRequest(handleAppServerRequest);
+  removeUpdateListener = bridge.updates?.onChanged(handleClientUpdateChanged);
   removeAppServerStatusListener = bridge.appServer.onStatus(status => {
     if (status.type === 'ready') document.querySelector('.connection').title = 'Codex app-server 已连接';
     if (status.type === 'stopped') document.querySelector('.connection').title = 'Codex app-server 已停止，将在下次请求时重启';
@@ -1581,6 +1673,7 @@ async function initialize() {
       }
     }
     applyConfig();
+    await loadClientUpdateStatus().catch(() => {});
     await loadUsage('month');
     if (publicConfig.configured) {
       await bridge.appServer.status().catch(() => {});
@@ -1600,6 +1693,7 @@ window.addEventListener('beforeunload', () => {
   removeAppServerEventListener?.();
   removeAppServerRequestListener?.();
   removeAppServerStatusListener?.();
+  removeUpdateListener?.();
 });
 document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {

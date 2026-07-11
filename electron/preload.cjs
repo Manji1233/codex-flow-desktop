@@ -17,6 +17,16 @@ contextBridge.exposeInMainWorld('codex', {
     sync: () => ipcRenderer.invoke('account:sync'),
     logout: () => ipcRenderer.invoke('account:logout')
   },
+  updates: {
+    status: () => ipcRenderer.invoke('update:status'),
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
+    install: () => ipcRenderer.invoke('update:install'),
+    backups: () => ipcRenderer.invoke('update:backups'),
+    openBackups: () => ipcRenderer.invoke('update:open-backups'),
+    restoreBackup: id => ipcRenderer.invoke('update:restore-backup', id),
+    onChanged: callback => eventSubscription('update:changed', callback)
+  },
   codingPlans: {
     list: () => ipcRenderer.invoke('coding-plans:list')
   },

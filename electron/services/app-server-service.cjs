@@ -1,5 +1,6 @@
 const { spawn } = require('node:child_process');
 const { findCodexExecutable } = require('./codex-cli-service.cjs');
+const { version: CLIENT_VERSION } = require('../../package.json');
 
 function tomlString(value) {
   return JSON.stringify(String(value));
@@ -73,7 +74,7 @@ class AppServerService {
       this.onStatus({ type: 'stopped', code });
     });
     await this.request('initialize', {
-      clientInfo: { name: 'codex-flow-desktop', title: 'ChatGPT Codex', version: '0.3.0' },
+      clientInfo: { name: 'codex-flow-desktop', title: 'ChatGPT Codex', version: CLIENT_VERSION },
       capabilities: { experimentalApi: true, requestAttestation: false }
     }, false);
     this.notify('initialized', {});
