@@ -46,6 +46,23 @@ test('plugin summaries include local manifest icons when available', t => {
   assert.match(summary.iconDataUrl, /^data:image\/png;base64,/);
 });
 
+test('social platform plugins use built-in real brand icons', () => {
+  const cases = [
+    ['xiaohongshu-publisher', '<title>小红书</title>'],
+    ['twitter-tools', '<title>X</title>'],
+    ['douyin-video', '<title>TikTok</title>'],
+    ['weibo-search', '<title>微博</title>'],
+    ['youtube-publisher', '<title>YouTube</title>'],
+    ['instagram-content', '<title>Instagram</title>']
+  ];
+  for (const [name, title] of cases) {
+    const summary = pluginSummary({ pluginId: name + '@market', name, marketplaceName: 'market' });
+    assert.match(summary.iconDataUrl, /^data:image\/svg\+xml;base64,/);
+    assert.match(Buffer.from(summary.iconDataUrl.split(',')[1], 'base64').toString('utf8'), new RegExp(title));
+    assert.equal(summary.brandColor, '#ffffff');
+  }
+});
+
 test('web results are isolated as untrusted context', () => {
   const prompt = buildSearchContext('今天的 AI 新闻', [{
     title: '示例来源',

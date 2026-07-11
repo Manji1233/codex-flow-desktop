@@ -1,6 +1,6 @@
 {
   "name": "codex-flow-desktop",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "author": "Manji1233",
   "description": "输入 API Key 即可使用的多模型桌面与终端 AI 客户端",

@@ -75,6 +75,15 @@ const ICON_MIME_TYPES = {
   '.gif': 'image/gif'
 };
 
+const BUILT_IN_BRAND_ICONS = [
+  { pattern: /小红书|xiaohongshu|rednote/i, file: 'xiaohongshu.svg' },
+  { pattern: /twitter|推特|x\.com/i, file: 'x.svg' },
+  { pattern: /tiktok|tik tok|抖音|douyin/i, file: 'tiktok.svg' },
+  { pattern: /新浪微博|微博|sinaweibo|weibo/i, file: 'weibo.svg' },
+  { pattern: /youtube|油管/i, file: 'youtube.svg' },
+  { pattern: /instagram/i, file: 'instagram.svg' }
+];
+
 function pluginCacheRoot() {
   return path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'plugins', 'cache');
 }
@@ -121,7 +130,23 @@ function pluginPresentation(plugin, cacheRoot) {
   return presentation;
 }
 
+function builtInBrandPresentation(plugin) {
+  const names = [plugin.name, plugin.displayName].filter(Boolean).map(value => String(value).trim());
+  const identity = [...names, plugin.description].filter(Boolean).join(' ');
+  const brand = BUILT_IN_BRAND_ICONS.find(item => item.pattern.test(identity))
+    || (names.some(name => /^x$/i.test(name)) ? { file: 'x.svg' } : null);
+  if (!brand) return {};
+  try {
+    const icon = fs.readFileSync(path.join(__dirname, '..', '..', 'assets', 'brand-icons', brand.file));
+    return { iconDataUrl: 'data:image/svg+xml;base64,' + icon.toString('base64'), brandColor: '#ffffff' };
+  } catch {
+    return {};
+  }
+}
+
 function pluginSummary(plugin, cacheRoot) {
+  const presentation = pluginPresentation(plugin, cacheRoot);
+  const builtInBrand = presentation.iconDataUrl ? {} : builtInBrandPresentation({ ...plugin, ...presentation });
   return {
     id: plugin.pluginId,
     name: plugin.name,
@@ -130,7 +155,9 @@ function pluginSummary(plugin, cacheRoot) {
     installed: Boolean(plugin.installed),
     enabled: Boolean(plugin.enabled),
     authPolicy: plugin.authPolicy || 'ON_USE',
-    ...pluginPresentation(plugin, cacheRoot)
+    ...presentation,
+    ...builtInBrand,
+    brandColor: builtInBrand.iconDataUrl ? builtInBrand.brandColor : presentation.brandColor
   };
 }
 
@@ -334,6 +361,7 @@ module.exports = {
   cleanCliError,
   pluginSummary,
   pluginPresentation,
+  builtInBrandPresentation,
   normalizeVersion,
   compareVersions
 };
