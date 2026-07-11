@@ -192,6 +192,15 @@ function appServerItemDescription(item) {
   return '正在执行：' + String(item.type || '任务');
 }
 
+function ensureAdvancedThreadActions() {
+  if (byId('reviewCurrentThread')) return;
+  byId('forkCurrentThread').insertAdjacentHTML('beforebegin', '<button id="reviewCurrentThread">代码审查</button><button id="compactCurrentThread">压缩上下文</button><button id="renameCurrentThread">重命名</button>');
+  const sessionDescription = document.querySelector('#codexSessionsModal .dialog-head small');
+  if (sessionDescription) sessionDescription.textContent = '恢复、分叉、命名、归档、压缩和删除 app-server 持久会话';
+}
+
+ensureAdvancedThreadActions();
+
 function renderAgentGraph() {
   const agents = [...collabAgents.entries()];
   byId('agentGraph').innerHTML = agents.length ? agents.map(([id, agent]) => '<article><i class="' + (agent.status === 'completed' || agent.status === 'closed' ? 'done' : agent.status === 'failed' ? 'failed' : '') + '">' + (agent.status === 'completed' ? '✓' : '◉') + '</i><span><b>' + escapeHtml(agent.nickname || 'Agent ' + id.slice(0, 6)) + '</b><small>' + escapeHtml(agent.status || '运行中') + (agent.message ? ' · ' + escapeHtml(agent.message) : '') + '</small></span></article>').join('') : '<small>当前没有协作 Agent</small>';
@@ -949,7 +958,7 @@ async function loadCodexSessions() {
     byId('codexSessionsList').innerHTML = codexThreads.length ? codexThreads.map(thread => {
       const preview = cleanThreadPrompt(thread.preview) || '暂无预览';
       const title = cleanThreadPrompt(thread.name) || preview || '未命名会话';
-      return '<article data-thread="' + thread.id + '"><span><b>' + escapeHtml(title.slice(0, 80)) + '</b><small>' + new Date(thread.updatedAt * 1000).toLocaleString('zh-CN') + ' · ' + escapeHtml(thread.modelProvider || '-') + (thread.forkedFromId ? ' · 已分叉' : '') + '</small><p>' + escapeHtml(preview.slice(0, 180)) + '</p></span><button data-session-action="resume">恢复</button><button data-session-action="fork">分叉</button><button data-session-action="' + (byId('showArchivedSessions')?.checked ? 'unarchive' : 'archive') + '">' + (byId('showArchivedSessions')?.checked ? '取消归档' : '归档') + '</button></article>';
+      return '<article data-thread="' + thread.id + '" data-thread-name="' + escapeHtml(title.slice(0, 80)) + '"><span><b>' + escapeHtml(title.slice(0, 80)) + '</b><small>' + new Date(thread.updatedAt * 1000).toLocaleString('zh-CN') + ' · ' + escapeHtml(thread.modelProvider || '-') + (thread.forkedFromId ? ' · 已分叉' : '') + '</small><p>' + escapeHtml(preview.slice(0, 180)) + '</p></span><button data-session-action="resume">恢复</button><button data-session-action="rename">命名</button><button data-session-action="fork">分叉</button><button data-session-action="' + (byId('showArchivedSessions')?.checked ? 'unarchive' : 'archive') + '">' + (byId('showArchivedSessions')?.checked ? '取消归档' : '归档') + '</button><button class="danger" data-session-action="delete">删除</button></article>';
     }).join('') : '<p>当前范围没有 Codex 会话。</p>';
   } catch (error) {
     byId('codexSessionsList').innerHTML = '<p>' + escapeHtml(cleanError(error)) + '</p>';
@@ -990,8 +999,46 @@ byId('codexSessionsList').addEventListener('click', async event => {
   try {
     if (action === 'resume') await resumeCodexThread(threadId);
     if (action === 'fork') await forkCodexThread(threadId);
+    if (action === 'rename') {
+      const name = prompt('输入新的会话名称', article.dataset.threadName || '');
+      if (name?.trim()) { await bridge.appServer.setThreadName({ threadId, name: name.trim() }); await loadCodexSessions(); }
+    }
     if (action === 'archive') { await bridge.appServer.archiveThread(threadId); await loadCodexSessions(); }
     if (action === 'unarchive') { await bridge.appServer.unarchiveThread(threadId); await loadCodexSessions(); }
+    if (action === 'delete' && confirm('永久删除这个 Codex 会话？此操作无法撤销。')) { await bridge.appServer.deleteThread(threadId); await loadCodexSessions(); }
+  } catch (error) { toastMsg(cleanError(error)); }
+});
+byId('reviewCurrentThread').addEventListener('click', async () => {
+  if (!currentThreadId) return toastMsg('请先开始或恢复一个 app-server 会话');
+  try {
+    prepareConversation('审查当前工作区未提交的代码改动', true);
+    byId('thinking').textContent = '正在启动 Codex 代码审查...';
+    document.querySelector('.composer').classList.add('busy');
+    byId('interruptTurn').classList.remove('hide');
+    const response = await bridge.appServer.startReview({ threadId: currentThreadId, target: { type: 'uncommittedChanges' }, delivery: 'inline' });
+    currentTurnId = response.turn.id;
+    lastTurnId = response.turn.id;
+  } catch (error) {
+    finishRequest();
+    toastMsg(cleanError(error));
+  }
+});
+byId('compactCurrentThread').addEventListener('click', async () => {
+  if (!currentThreadId) return toastMsg('请先开始或恢复一个 app-server 会话');
+  try {
+    await bridge.appServer.compactThread(currentThreadId);
+    toastMsg('正在压缩会话上下文，完成后可继续对话');
+  } catch (error) { toastMsg(cleanError(error)); }
+});
+byId('renameCurrentThread').addEventListener('click', async () => {
+  if (!currentThreadId) return toastMsg('请先开始或恢复一个 app-server 会话');
+  const name = prompt('输入新的会话名称', currentThread?.name || '');
+  if (!name?.trim()) return;
+  try {
+    await bridge.appServer.setThreadName({ threadId: currentThreadId, name: name.trim() });
+    if (currentThread) currentThread.name = name.trim();
+    byId('agentState').textContent = 'Codex Flow · ' + name.trim();
+    toastMsg('会话名称已更新');
   } catch (error) { toastMsg(cleanError(error)); }
 });
 byId('forkCurrentThread').addEventListener('click', async () => { if (currentThreadId) await forkCodexThread(currentThreadId, lastTurnId); else toastMsg('当前不是 app-server 会话'); });

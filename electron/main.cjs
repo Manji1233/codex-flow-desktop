@@ -207,6 +207,10 @@ function registerIpc() {
   ipcMain.handle('app-server:thread-fork', async (_event, payload) => { const provider = await ensureAppServer(); return appServer.request('thread/fork', { threadId: payload.threadId, lastTurnId: payload.lastTurnId || null, ...interactiveThreadConfig(payload, provider) }); });
   ipcMain.handle('app-server:thread-archive', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/archive', { threadId }); });
   ipcMain.handle('app-server:thread-unarchive', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/unarchive', { threadId }); });
+  ipcMain.handle('app-server:thread-delete', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/delete', { threadId }); });
+  ipcMain.handle('app-server:thread-name-set', async (_event, payload) => { await ensureAppServer(); return appServer.request('thread/name/set', { threadId: payload.threadId, name: payload.name }); });
+  ipcMain.handle('app-server:thread-compact', async (_event, threadId) => { await ensureAppServer(); return appServer.request('thread/compact/start', { threadId }); });
+  ipcMain.handle('app-server:review-start', async (_event, payload) => { await ensureAppServer(); return appServer.request('review/start', { threadId: payload.threadId, target: payload.target || { type: 'uncommittedChanges' }, delivery: payload.delivery || 'inline' }); });
   ipcMain.handle('app-server:turn-start', async (_event, payload) => {
     await ensureAppServer();
     const input = [...(payload.input || [])];

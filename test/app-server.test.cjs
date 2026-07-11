@@ -38,3 +38,19 @@ test('app-server forwards server requests and serializes renderer responses', ()
   assert.deepEqual(writes, [{ id: 'approval-1', result: { decision: 'accept' } }]);
   assert.throws(() => service.respond('approval-1', {}), /已失效/);
 });
+
+test('app-server serializes advanced thread and review requests', async () => {
+  const writes = [];
+  const service = new AppServerService();
+  service.child = { stdin: { writable: true, write: line => writes.push(JSON.parse(line)) } };
+  const deletion = service.request('thread/delete', { threadId: 'thread-1' });
+  service.consume('{"id":"1","result":{}}\n');
+  await deletion;
+  const review = service.request('review/start', { threadId: 'thread-1', target: { type: 'uncommittedChanges' }, delivery: 'inline' });
+  service.consume('{"id":"2","result":{"reviewThreadId":"thread-1","turn":{"id":"turn-1"}}}\n');
+  await review;
+  assert.deepEqual(writes, [
+    { id: '1', method: 'thread/delete', params: { threadId: 'thread-1' } },
+    { id: '2', method: 'review/start', params: { threadId: 'thread-1', target: { type: 'uncommittedChanges' }, delivery: 'inline' } }
+  ]);
+});
