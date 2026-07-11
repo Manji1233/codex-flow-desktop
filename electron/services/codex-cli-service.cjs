@@ -143,6 +143,45 @@ async function getStatus() {
   }
 }
 
+function normalizeVersion(value) {
+  return String(value || '').match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0] || '';
+}
+
+function compareVersions(left, right) {
+  const parse = value => normalizeVersion(value).split(/[.-]/).slice(0, 3).map(part => Number(part) || 0);
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] > rightParts[index] ? 1 : -1;
+  }
+  return 0;
+}
+
+async function getDiagnostics() {
+  const status = await getStatus();
+  const installedVersion = normalizeVersion(status.version);
+  let latestVersion = '';
+  let updateError = null;
+  try {
+    const response = await fetch('https://registry.npmjs.org/@openai%2Fcodex/latest', { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    latestVersion = normalizeVersion((await response.json()).version);
+  } catch (error) {
+    updateError = error.message;
+  }
+  return {
+    ...status,
+    productName: 'ChatGPT Codex',
+    installedVersion,
+    latestVersion,
+    upToDate: Boolean(installedVersion && latestVersion && compareVersions(installedVersion, latestVersion) >= 0),
+    releaseChannel: 'stable',
+    updateError,
+    protocol: 'app-server v2',
+    capabilities: ['API Key / ChatGPT 切换', '模型能力控制', '持久会话', '交互审批', '联网搜索', 'Skills 与 MCP', '图片附件', '多代理', 'Diff', 'Plan', 'PTY 终端']
+  };
+}
+
 async function listExtensions() {
   const [{ stdout: pluginOutput }, { stdout: mcpOutput }] = await Promise.all([
     runCommand(['plugin', 'list', '--available', '--json']),
@@ -224,15 +263,17 @@ async function removeMcp(name) {
 async function runAgent({ provider, model, prompt, workspace, webSearch, onEvent, onChild }) {
   const args = [];
   if (webSearch) args.push('--search');
-  args.push(
-    '-a', 'never',
-    '-m', model,
+  args.push('-a', 'never');
+  if (model) args.push('-m', model);
+  if (provider?.authMode !== 'chatgpt') args.push(
     '-c', 'model_provider="codex_flow"',
-    '-c', 'model_providers.codex_flow.name=' + tomlString(provider.name || 'Codex Flow'),
+    '-c', 'model_providers.codex_flow.name=' + tomlString(provider.name || 'ChatGPT Codex'),
     '-c', 'model_providers.codex_flow.base_url=' + tomlString(provider.baseUrl),
     '-c', 'model_providers.codex_flow.env_key="CODEX_FLOW_API_KEY"',
     '-c', 'model_providers.codex_flow.wire_api="responses"',
-    '-c', 'model_providers.codex_flow.requires_openai_auth=false',
+    '-c', 'model_providers.codex_flow.requires_openai_auth=false'
+  );
+  args.push(
     '-c', 'sandbox_workspace_write.network_access=true',
     'exec', '--json', '--skip-git-repo-check', '-s', 'workspace-write', '-C', workspace, prompt
   );
@@ -266,7 +307,7 @@ async function runAgent({ provider, model, prompt, workspace, webSearch, onEvent
 
   await runCommand(args, {
     cwd: workspace,
-    env: { CODEX_FLOW_API_KEY: provider.apiKey },
+    env: provider?.authMode === 'chatgpt' ? undefined : { CODEX_FLOW_API_KEY: provider.apiKey },
     onChild,
     onStdout: chunk => {
       lineBuffer += chunk;
@@ -283,6 +324,7 @@ async function runAgent({ provider, model, prompt, workspace, webSearch, onEvent
 module.exports = {
   findCodexExecutable,
   getStatus,
+  getDiagnostics,
   listExtensions,
   installPlugin,
   removePlugin,
@@ -291,5 +333,7 @@ module.exports = {
   runAgent,
   cleanCliError,
   pluginSummary,
-  pluginPresentation
+  pluginPresentation,
+  normalizeVersion,
+  compareVersions
 };

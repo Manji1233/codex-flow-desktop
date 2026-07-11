@@ -1,4 +1,4 @@
-# Codex Flow 客户端实施路线
+# ChatGPT Codex 客户端实施路线
 
 ## 1. 总体架构建议
 

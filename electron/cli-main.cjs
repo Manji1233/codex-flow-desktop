@@ -18,7 +18,7 @@ const failure = text => color('31', text);
 
 function printHelp() {
   console.log(`
-${accent('Codex Flow')} - 简单的多模型终端 AI 客户端
+${accent('ChatGPT Codex')} - 简单的多模型终端 AI 客户端
 
 用法:
   codex-flow login                 配置 API Key、平台和模型

@@ -8,7 +8,14 @@ function eventSubscription(channel, callback) {
 
 contextBridge.exposeInMainWorld('codex', {
   config: {
-    getPublic: () => ipcRenderer.invoke('config:get-public')
+    getPublic: () => ipcRenderer.invoke('config:get-public'),
+    activateMode: mode => ipcRenderer.invoke('config:activate-mode', mode)
+  },
+  account: {
+    login: () => ipcRenderer.invoke('account:login-start'),
+    cancelLogin: loginId => ipcRenderer.invoke('account:login-cancel', loginId),
+    sync: () => ipcRenderer.invoke('account:sync'),
+    logout: () => ipcRenderer.invoke('account:logout')
   },
   codingPlans: {
     list: () => ipcRenderer.invoke('coding-plans:list')
@@ -20,6 +27,7 @@ contextBridge.exposeInMainWorld('codex', {
   },
   agent: {
     status: () => ipcRenderer.invoke('codex:status'),
+    diagnostics: () => ipcRenderer.invoke('codex:diagnostics'),
     start: payload => ipcRenderer.invoke('agent:start', payload),
     cancel: requestId => ipcRenderer.invoke('agent:cancel', requestId),
     onEvent: callback => eventSubscription('agent:event', callback)
@@ -55,6 +63,7 @@ contextBridge.exposeInMainWorld('codex', {
   images: { choose: () => ipcRenderer.invoke('images:choose') },
   appServer: {
     status: () => ipcRenderer.invoke('app-server:status'),
+    modelCatalog: () => ipcRenderer.invoke('app-server:model-catalog'),
     listThreads: payload => ipcRenderer.invoke('app-server:thread-list', payload),
     readThread: threadId => ipcRenderer.invoke('app-server:thread-read', threadId),
     startThread: payload => ipcRenderer.invoke('app-server:thread-start', payload),

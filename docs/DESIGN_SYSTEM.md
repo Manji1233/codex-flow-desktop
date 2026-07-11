@@ -1,4 +1,4 @@
-# Codex Flow 设计系统
+# ChatGPT Codex 客户端设计系统
 
 ## 1. 视觉方向
 

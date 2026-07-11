@@ -65,6 +65,10 @@ let currentTurnPlan = [];
 let currentPlanExplanation = '';
 let terminalProcessId = null;
 let terminalOutput = '';
+let modelCatalog = [];
+let providerCapabilities = { webSearch: false, imageGeneration: false, namespaceTools: false };
+let chatGptSnapshot = null;
+let pendingChatGptLoginId = null;
 let removeAppServerEventListener = null;
 let removeAppServerRequestListener = null;
 let removeAppServerStatusListener = null;
@@ -143,7 +147,7 @@ function prepareConversation(prompt, agentMode = true) {
   }
   threadHistory.innerHTML = '';
   byId('userText').textContent = prompt;
-  byId('agentState').textContent = agentMode ? 'Codex Flow · Agent 执行中' : 'Codex Flow · 普通对话';
+  byId('agentState').textContent = agentMode ? 'ChatGPT Codex · Agent 执行中' : 'ChatGPT Codex · 普通对话';
   byId('thinking').textContent = agentMode ? '正在启动 Codex Agent...' : '正在等待模型响应...';
   byId('thinking').classList.remove('hide');
   byId('toolTrace').innerHTML = '';
@@ -182,7 +186,7 @@ function finishRequest() {
   byId('interruptTurn')?.classList.add('hide');
   document.querySelector('.composer').classList.remove('busy');
   byId('thinking').classList.add('hide');
-  byId('agentState').textContent = 'Codex Flow · 已完成';
+  byId('agentState').textContent = 'ChatGPT Codex · 已完成';
   loadUsage('month');
   loadHistory();
 }
@@ -220,6 +224,233 @@ function ensureDeveloperPanels() {
 }
 
 ensureDeveloperPanels();
+
+function ensureLatestCodexPanels() {
+  if (byId('runtimeDiagnosticsModal')) return;
+  const modelControl = document.querySelector('.composer .model');
+  modelControl?.insertAdjacentHTML('afterend', '<select id="reasoningEffort" class="model-capability hide" title="推理强度"></select><select id="personality" class="model-capability hide" title="回答风格"><option value="none">风格：默认</option><option value="friendly">风格：友好</option><option value="pragmatic">风格：务实</option></select><select id="serviceTier" class="model-capability hide" title="服务层级"></select>');
+  document.querySelector('#models .heading')?.insertAdjacentHTML('beforeend', '<button class="outline" id="openRuntimeDiagnostics">引擎诊断</button>');
+  byId('providers')?.insertAdjacentHTML('beforebegin', '<section class="auth-mode-panel"><i>✦</i><span><b id="authModeName">API Key 模式（默认）</b><small id="authModeDescription">密钥由系统安全存储加密</small></span><em id="authModeStatus">正在读取</em><button class="outline" id="switchApiKeyMode">使用 API Key</button><button class="primary" id="openChatGptAccount">登录 ChatGPT（可选）</button></section>');
+  byId('connect')?.insertAdjacentHTML('afterend', '<button class="chatgpt-secondary" id="welcomeChatGptLogin">或使用 ChatGPT 账户（可选）</button>');
+  document.body.insertAdjacentHTML('beforeend', '<div class="modal" id="runtimeDiagnosticsModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>ChatGPT Codex 运行时诊断</b><small id="runtimeSummary">正在读取官方稳定版状态</small></span><button class="close" id="closeRuntimeDiagnostics">×</button></div><div class="dialog-body runtime-diagnostics"><div class="runtime-grid"><article><small>本机版本</small><b id="runtimeInstalled">--</b></article><article><small>官方稳定版</small><b id="runtimeLatest">--</b></article><article><small>协议</small><b id="runtimeProtocol">--</b></article><article><small>更新状态</small><b id="runtimeUpdateState">--</b></article></div><h3>当前模型能力</h3><div class="runtime-capabilities" id="modelCapabilities">等待模型目录</div><h3>已接入能力</h3><div class="runtime-capabilities" id="runtimeCapabilities"></div><p class="runtime-note" id="runtimeNote"></p></div><div class="dialog-foot"><button class="outline" id="refreshRuntimeDiagnostics">重新检测</button><button class="primary" id="closeRuntimeDiagnosticsFoot">完成</button></div></div></div><div class="modal" id="chatgptAccountModal"><div class="dialog developer-dialog"><div class="dialog-head"><span><b>ChatGPT 账户（可选）</b><small id="chatgptAccountSummary">默认仍使用 API Key，可随时切换</small></span><button class="close" id="closeChatGptAccount">×</button></div><div class="dialog-body runtime-diagnostics"><div class="runtime-grid"><article><small>账户</small><b id="chatgptAccountEmail">未登录</b></article><article><small>套餐</small><b id="chatgptAccountPlan">--</b></article><article><small>短周期额度</small><b id="chatgptPrimaryLimit">--</b></article><article><small>长周期额度</small><b id="chatgptSecondaryLimit">--</b></article></div><h3>ChatGPT Codex 用量</h3><div class="runtime-capabilities" id="chatgptUsageSummary"><span>登录后显示账户用量</span></div><p class="runtime-note">登录令牌由官方 Codex 运行时保存在本机；本客户端不读取或保存 ChatGPT 密码。</p></div><div class="dialog-foot"><button class="outline" id="logoutChatGpt">退出 ChatGPT</button><button class="outline" id="refreshChatGptAccount">刷新状态</button><button class="primary" id="loginChatGpt">使用 ChatGPT 登录</button></div></div></div>');
+  byId('openRuntimeDiagnostics').addEventListener('click', openRuntimeDiagnostics);
+  byId('refreshRuntimeDiagnostics').addEventListener('click', refreshRuntimeDiagnostics);
+  byId('closeRuntimeDiagnostics').addEventListener('click', () => modal('runtimeDiagnosticsModal', false));
+  byId('closeRuntimeDiagnosticsFoot').addEventListener('click', () => modal('runtimeDiagnosticsModal', false));
+  byId('openChatGptAccount').addEventListener('click', openChatGptAccount);
+  byId('switchApiKeyMode').addEventListener('click', switchToApiKeyMode);
+  byId('closeChatGptAccount').addEventListener('click', () => modal('chatgptAccountModal', false));
+  byId('loginChatGpt').addEventListener('click', startChatGptLogin);
+  byId('refreshChatGptAccount').addEventListener('click', refreshChatGptAccount);
+  byId('logoutChatGpt').addEventListener('click', logoutChatGpt);
+  byId('welcomeChatGptLogin').addEventListener('click', () => { renderChatGptAccount(); modal('chatgptAccountModal'); });
+  document.querySelector('.connection')?.addEventListener('click', () => page('models'));
+}
+
+function selectedModelMetadata() {
+  const model = byId('modelPicker').value.toLowerCase();
+  return modelCatalog.find(item => String(item.model || '').toLowerCase() === model || String(item.id || '').toLowerCase() === model) || null;
+}
+
+function renderModelCapabilities() {
+  const metadata = selectedModelMetadata();
+  const effort = byId('reasoningEffort');
+  const personality = byId('personality');
+  const serviceTier = byId('serviceTier');
+  const efforts = metadata?.supportedReasoningEfforts || [];
+  effort.innerHTML = efforts.map(option => '<option value="' + escapeHtml(option.reasoningEffort) + '">推理：' + escapeHtml(option.reasoningEffort) + '</option>').join('');
+  if (efforts.some(option => option.reasoningEffort === metadata.defaultReasoningEffort)) effort.value = metadata.defaultReasoningEffort;
+  effort.classList.toggle('hide', !efforts.length);
+  personality.classList.toggle('hide', !metadata?.supportsPersonality);
+  const tiers = metadata?.serviceTiers || [];
+  serviceTier.innerHTML = tiers.map(tier => '<option value="' + escapeHtml(tier.id) + '">层级：' + escapeHtml(tier.name) + '</option>').join('');
+  if (tiers.some(tier => tier.id === metadata.defaultServiceTier)) serviceTier.value = metadata.defaultServiceTier;
+  serviceTier.classList.toggle('hide', !tiers.length);
+  const capabilityView = byId('modelCapabilities');
+  if (capabilityView) {
+    const labels = [
+      providerCapabilities.webSearch ? '✓ 原生联网搜索' : '— 客户端联网搜索',
+      providerCapabilities.imageGeneration ? '✓ 原生图片生成' : '— 图片 Skill 回退',
+      providerCapabilities.namespaceTools ? '✓ 命名空间工具' : '— 标准工具',
+      metadata?.inputModalities?.includes('image') ? '✓ 图片输入' : '— 仅文本输入',
+      efforts.length ? '✓ 可调推理强度' : '— 默认推理强度',
+      metadata?.supportsPersonality ? '✓ Personality' : '— 默认风格'
+    ];
+    capabilityView.innerHTML = labels.map(label => '<span>' + escapeHtml(label) + '</span>').join('');
+  }
+}
+
+async function loadModelCapabilities() {
+  if (!bridge || !publicConfig.configured) return;
+  try {
+    const result = await bridge.appServer.modelCatalog();
+    modelCatalog = result.models || [];
+    providerCapabilities = result.capabilities || providerCapabilities;
+  } catch {
+    modelCatalog = [];
+  }
+  renderModelCapabilities();
+}
+
+async function refreshRuntimeDiagnostics() {
+  byId('runtimeSummary').textContent = '正在连接 npm 官方发布源并检查 app-server';
+  try {
+    const diagnostics = await bridge.agent.diagnostics();
+    byId('runtimeInstalled').textContent = diagnostics.installedVersion || '不可用';
+    byId('runtimeLatest').textContent = diagnostics.latestVersion || '查询失败';
+    byId('runtimeProtocol').textContent = diagnostics.protocol;
+    byId('runtimeUpdateState').textContent = diagnostics.upToDate ? '已是最新稳定版' : diagnostics.latestVersion ? '发现新版本' : '暂时无法判断';
+    byId('runtimeSummary').textContent = diagnostics.productName + ' · ' + (diagnostics.available ? '运行正常' : '运行时不可用');
+    byId('runtimeCapabilities').innerHTML = diagnostics.capabilities.map(capability => '<span>✓ ' + escapeHtml(capability) + '</span>').join('');
+    byId('runtimeNote').textContent = diagnostics.updateError ? '最新版查询失败：' + diagnostics.updateError : '当前使用 stable 渠道；客户端不会自动切换到 alpha 版本。';
+    await loadModelCapabilities();
+  } catch (error) {
+    byId('runtimeSummary').textContent = cleanError(error);
+  }
+}
+
+async function openRuntimeDiagnostics() {
+  modal('runtimeDiagnosticsModal');
+  await refreshRuntimeDiagnostics();
+}
+
+function resetProviderThread() {
+  currentThreadId = null;
+  currentThread = null;
+  currentTurnId = null;
+  lastTurnId = null;
+  currentTurnDiff = '';
+  currentTurnPlan = [];
+  currentPlanExplanation = '';
+  updateDeveloperActionState();
+}
+
+function planName(plan) {
+  const names = { free: 'Free', go: 'Go', plus: 'Plus', pro: 'Pro', prolite: 'Pro Lite', team: 'Team', business: 'Business', enterprise: 'Enterprise', edu: 'Edu', unknown: '未知' };
+  return names[plan] || String(plan || '--').replaceAll('_', ' ');
+}
+
+function formatRateLimit(window) {
+  if (!window) return '--';
+  const remaining = Math.max(0, 100 - Number(window.usedPercent || 0));
+  const reset = window.resetsAt ? ' · ' + new Date(window.resetsAt * 1000).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' 重置' : '';
+  return '剩余 ' + remaining + '%' + reset;
+}
+
+function renderAuthModePanel() {
+  if (!byId('authModeName')) return;
+  const chatgpt = publicConfig.authMode === 'chatgpt';
+  byId('authModeName').textContent = chatgpt ? 'ChatGPT 账户模式' : 'API Key 模式（默认）';
+  byId('authModeDescription').textContent = chatgpt
+    ? (publicConfig.account?.email || '已连接官方 Codex 账户') + ' · ' + planName(publicConfig.account?.planType)
+    : (publicConfig.provider?.name || '尚未连接 API') + (publicConfig.provider?.model ? ' · ' + publicConfig.provider.model : '');
+  byId('authModeStatus').textContent = publicConfig.configured ? '● 当前使用' : '未连接';
+  byId('switchApiKeyMode').disabled = !publicConfig.availableModes?.apiKey || !chatgpt;
+  byId('openChatGptAccount').textContent = chatgpt ? '账户详情' : publicConfig.availableModes?.chatgpt ? '切换到 ChatGPT' : '登录 ChatGPT（可选）';
+}
+
+function renderChatGptAccount() {
+  const account = chatGptSnapshot?.account || publicConfig.chatgptAccount || publicConfig.account;
+  const rateLimits = chatGptSnapshot?.rateLimits;
+  const limit = rateLimits?.rateLimitsByLimitId?.codex || rateLimits?.rateLimits || null;
+  const summary = chatGptSnapshot?.usage?.summary || {};
+  byId('chatgptAccountEmail').textContent = account?.email || (account ? 'ChatGPT 账户' : '未登录');
+  byId('chatgptAccountPlan').textContent = planName(account?.planType);
+  byId('chatgptPrimaryLimit').textContent = formatRateLimit(limit?.primary);
+  byId('chatgptSecondaryLimit').textContent = formatRateLimit(limit?.secondary);
+  const usage = [
+    summary.lifetimeTokens != null ? '累计 ' + Number(summary.lifetimeTokens).toLocaleString('zh-CN') + ' Token' : null,
+    summary.currentStreakDays != null ? '连续使用 ' + summary.currentStreakDays + ' 天' : null,
+    summary.peakDailyTokens != null ? '单日峰值 ' + Number(summary.peakDailyTokens).toLocaleString('zh-CN') : null
+  ].filter(Boolean);
+  byId('chatgptUsageSummary').innerHTML = (usage.length ? usage : ['账户用量暂不可用']).map(item => '<span>' + escapeHtml(item) + '</span>').join('');
+  byId('chatgptAccountSummary').textContent = account ? '已登录 · 默认仍可随时切回 API Key' : pendingChatGptLoginId ? '请在浏览器中完成登录' : '默认使用 API Key，ChatGPT 登录为可选方式';
+  byId('logoutChatGpt').disabled = !account;
+  byId('refreshChatGptAccount').disabled = !account;
+  byId('loginChatGpt').textContent = account ? '同步并使用该账户' : pendingChatGptLoginId ? '等待浏览器登录' : '使用 ChatGPT 登录';
+  byId('loginChatGpt').disabled = Boolean(pendingChatGptLoginId);
+}
+
+async function applyChatGptSnapshot(snapshot) {
+  chatGptSnapshot = snapshot;
+  publicConfig = snapshot.config;
+  pendingChatGptLoginId = null;
+  resetProviderThread();
+  applyConfig();
+  renderChatGptAccount();
+  modal('welcome', false);
+  await loadModelCapabilities();
+}
+
+async function startChatGptLogin() {
+  const button = byId('loginChatGpt');
+  button.disabled = true;
+  byId('chatgptAccountSummary').textContent = '正在打开官方 ChatGPT 登录页面...';
+  try {
+    const response = await bridge.account.login();
+    if (response.completed) {
+      await applyChatGptSnapshot(response.snapshot);
+      toastMsg('已切换到 ChatGPT 账户模式');
+    } else {
+      pendingChatGptLoginId = response.loginId;
+      renderChatGptAccount();
+    }
+  } catch (error) {
+    toastMsg(cleanError(error));
+    byId('chatgptAccountSummary').textContent = cleanError(error);
+  } finally {
+    button.disabled = Boolean(pendingChatGptLoginId);
+  }
+}
+
+async function refreshChatGptAccount() {
+  try {
+    await applyChatGptSnapshot(await bridge.account.sync());
+    toastMsg('ChatGPT 账户状态已刷新');
+  } catch (error) { toastMsg(cleanError(error)); }
+}
+
+async function openChatGptAccount() {
+  if (publicConfig.authMode !== 'chatgpt' && publicConfig.availableModes?.chatgpt) {
+    try {
+      publicConfig = await bridge.config.activateMode('chatgpt');
+      resetProviderThread();
+      applyConfig();
+      await loadModelCapabilities();
+      toastMsg('已切换到 ChatGPT 账户模式');
+    } catch (error) { return toastMsg(cleanError(error)); }
+  }
+  renderChatGptAccount();
+  modal('chatgptAccountModal');
+}
+
+async function switchToApiKeyMode() {
+  try {
+    publicConfig = await bridge.config.activateMode('apiKey');
+    chatGptSnapshot = null;
+    resetProviderThread();
+    applyConfig();
+    await loadModelCapabilities();
+    toastMsg('已切换到 API Key 模式');
+  } catch (error) { toastMsg(cleanError(error)); }
+}
+
+async function logoutChatGpt() {
+  if (!confirm('退出本机 ChatGPT Codex 账户？已保存的 API Key 不会被删除。')) return;
+  try {
+    publicConfig = await bridge.account.logout();
+    chatGptSnapshot = null;
+    pendingChatGptLoginId = null;
+    resetProviderThread();
+    applyConfig();
+    renderChatGptAccount();
+    modal('chatgptAccountModal', false);
+    if (!publicConfig.configured) modal('welcome');
+    toastMsg('已退出 ChatGPT 账户');
+  } catch (error) { toastMsg(cleanError(error)); }
+}
+
+ensureLatestCodexPanels();
 
 function updateDeveloperActionState() {
   if (!byId('viewTurnDiff')) return;
@@ -273,6 +504,29 @@ function updateCollabItem(item) {
 
 async function handleAppServerEvent(event) {
   const { method, params } = event;
+  if (method === 'account/login/completed' && (!pendingChatGptLoginId || !params.loginId || params.loginId === pendingChatGptLoginId)) {
+    if (params.success) {
+      try {
+        await applyChatGptSnapshot(await bridge.account.sync());
+        modal('chatgptAccountModal');
+        toastMsg('ChatGPT 登录成功，已切换账户模式');
+      } catch (error) { toastMsg(cleanError(error)); }
+    } else {
+      pendingChatGptLoginId = null;
+      renderChatGptAccount();
+      toastMsg(params.error || 'ChatGPT 登录未完成');
+    }
+    return;
+  }
+  if (method === 'account/rateLimits/updated' && chatGptSnapshot) {
+    chatGptSnapshot.rateLimits = { ...(chatGptSnapshot.rateLimits || {}), rateLimits: params.rateLimits };
+    if (byId('chatgptAccountModal').classList.contains('show')) renderChatGptAccount();
+    return;
+  }
+  if (method === 'model/rerouted' && params.threadId === currentThreadId) {
+    toastMsg('模型已从 ' + params.fromModel + ' 自动切换为 ' + params.toModel);
+    return;
+  }
   if (method === 'command/exec/outputDelta' && params.processId === terminalProcessId) {
     const bytes = Uint8Array.from(atob(params.deltaBase64 || ''), character => character.charCodeAt(0));
     terminalOutput = (terminalOutput + new TextDecoder().decode(bytes)).slice(-120000);
@@ -316,7 +570,7 @@ async function handleAppServerEvent(event) {
     lastTurnId = params.turn.id;
     document.querySelector('.composer').classList.add('busy');
     byId('interruptTurn').classList.remove('hide');
-    byId('agentState').textContent = 'Codex Flow · app-server 执行中';
+    byId('agentState').textContent = 'ChatGPT Codex · app-server 执行中';
     return;
   }
   if (method === 'item/agentMessage/delta' && params.threadId === currentThreadId) {
@@ -393,7 +647,7 @@ function handleAppServerRequest(request) {
     modal('approvalModal');
     return;
   }
-  bridge.appServer.respond({ requestId: request.requestId, error: { code: -32601, message: 'Codex Flow 暂不支持此交互请求。' } });
+  bridge.appServer.respond({ requestId: request.requestId, error: { code: -32601, message: 'ChatGPT Codex 暂不支持此交互请求。' } });
   pendingInteraction = null;
 }
 
@@ -439,8 +693,11 @@ byId('submitUserInput').addEventListener('click', async () => {
 byId('cancelUserInput').addEventListener('click', () => respondToInteraction({ answers: {} }));
 
 async function startAppServerTurn(prompt, context = {}) {
+  const personality = byId('personality').classList.contains('hide') ? null : byId('personality').value;
+  const serviceTier = byId('serviceTier').classList.contains('hide') ? null : byId('serviceTier').value;
+  const effort = byId('reasoningEffort').classList.contains('hide') ? null : byId('reasoningEffort').value;
   if (!currentThreadId) {
-    const response = await bridge.appServer.startThread({ model: byId('modelPicker').value, workspace: currentWorkspace, approvalPolicy: 'on-request' });
+    const response = await bridge.appServer.startThread({ model: byId('modelPicker').value, personality, serviceTier, workspace: currentWorkspace, approvalPolicy: 'on-request' });
     currentThread = response.thread;
     currentThreadId = response.thread.id;
   }
@@ -450,7 +707,7 @@ async function startAppServerTurn(prompt, context = {}) {
   document.querySelector('.composer').classList.add('busy');
   byId('interruptTurn').classList.remove('hide');
   appServerTurnContext = { prompt, context, hasImages: selectedImages.length > 0 };
-  const response = await bridge.appServer.startTurn({ threadId: currentThreadId, input: buildTurnInput(prompt), model: byId('modelPicker').value, workspace: currentWorkspace, webSearch: webEnabled, multiAgentMode: byId('multiAgentMode').value, source: context.source || 'chat' });
+  const response = await bridge.appServer.startTurn({ threadId: currentThreadId, input: buildTurnInput(prompt), model: byId('modelPicker').value, effort, personality, serviceTier, workspace: currentWorkspace, webSearch: webEnabled, multiAgentMode: byId('multiAgentMode').value, source: context.source || 'chat' });
   currentTurnId = response.turn.id;
   selectedImages = [];
   renderAttachmentPreview();
@@ -691,13 +948,16 @@ async function loadTasks() {
 }
 
 function renderProviders() {
-  const selectedName = publicConfig.provider?.name;
+  const apiProvider = publicConfig.authMode === 'chatgpt' ? publicConfig.savedProvider : publicConfig.provider;
+  const selectedName = apiProvider?.name;
   byId('providers').innerHTML = providerCatalog.map(provider => {
-    const connected = publicConfig.configured && selectedName === provider[1];
-    const discovered = connected ? publicConfig.provider.models.map(model => model.id) : [];
+    const connected = publicConfig.authMode !== 'chatgpt' && publicConfig.configured && selectedName === provider[1];
+    const saved = publicConfig.authMode === 'chatgpt' && selectedName === provider[1];
+    const discovered = connected || saved ? (apiProvider?.models || []).map(model => model.id) : [];
     const labels = discovered.length ? discovered.slice(0, 4) : provider[3].split(',');
     const more = discovered.length > 4 ? '<span>+' + (discovered.length - 4) + '</span>' : '';
-    return '<article class="provider"><div class="provider-head"><i>' + provider[0] + '</i><span><b>' + provider[1] + '</b><small>' + (connected ? '已连接 · ' + publicConfig.provider.baseUrl : provider[2] || '填写自定义地址') + '</small></span><em class="' + (connected ? 'online' : '') + '">' + (connected ? '● 已连接' : '未连接') + '</em></div><div class="provider-models">' + labels.map(label => '<span>' + escapeHtml(label) + '</span>').join('') + more + '</div><div class="provider-foot"><span>' + (connected ? discovered.length + ' 个模型可用' : 'OpenAI 兼容') + '</span><button class="open-provider" data-name="' + provider[1] + '" data-url="' + provider[2] + '">' + (connected ? '管理' : '连接') + '</button></div></article>';
+    const state = connected ? '● 当前使用' : saved ? '● 已保存' : '未连接';
+    return '<article class="provider"><div class="provider-head"><i>' + provider[0] + '</i><span><b>' + provider[1] + '</b><small>' + (connected || saved ? '已保存 · ' + apiProvider.baseUrl : provider[2] || '填写自定义地址') + '</small></span><em class="' + (connected ? 'online' : '') + '">' + state + '</em></div><div class="provider-models">' + labels.map(label => '<span>' + escapeHtml(label) + '</span>').join('') + more + '</div><div class="provider-foot"><span>' + (connected || saved ? discovered.length + ' 个模型可用' : 'OpenAI 兼容') + '</span><button class="open-provider" data-name="' + provider[1] + '" data-url="' + provider[2] + '">' + (connected || saved ? '管理' : '连接') + '</button></div></article>';
   }).join('');
 }
 
@@ -909,6 +1169,7 @@ async function connectOnboarding() {
   try {
     publicConfig = await bridge.provider.saveAndDiscover({ id: name.toLowerCase().replaceAll(' ', '-'), name, baseUrl, apiKey: byId('apiKey').value, model });
     applyConfig();
+    await loadModelCapabilities();
     modal('welcome', false);
     toastMsg('连接成功，已载入 ' + publicConfig.provider.models.length + ' 个模型');
   } catch (error) {
@@ -968,6 +1229,7 @@ byId('providerConnect').addEventListener('click', async () => {
       model: byId('providerModelId').value
     });
     applyConfig();
+    await loadModelCapabilities();
     modal('providerModal', false);
     toastMsg('连接成功，发现 ' + publicConfig.provider.models.length + ' 个模型');
   } catch (error) {
@@ -980,18 +1242,21 @@ byId('providerConnect').addEventListener('click', async () => {
 
 function applyConfig() {
   renderProviders();
+  renderAuthModePanel();
   const picker = byId('modelPicker');
   const models = publicConfig.provider?.models || [];
-  picker.innerHTML = models.length ? models.map(model => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.id) + '</option>').join('') : '<option>GPT-5.4</option>';
+  picker.innerHTML = models.length ? models.map(model => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.displayName || model.id) + '</option>').join('') : '<option>GPT-5.4</option>';
   if (publicConfig.provider?.model) picker.value = publicConfig.provider.model;
   const connection = document.querySelector('.connection');
   const engine = codexStatus.available ? 'Codex Agent ' + codexStatus.version.replace('codex-cli ', '') : '普通对话模式';
-  connection.innerHTML = '<i></i>' + (publicConfig.configured ? engine : '未连接 API');
+  connection.innerHTML = '<i></i>' + (publicConfig.configured ? (publicConfig.authMode === 'chatgpt' ? 'ChatGPT · ' + planName(publicConfig.account?.planType) : engine) : '未连接 API');
+  renderModelCapabilities();
 }
 
 byId('modelPicker').addEventListener('change', async () => {
   if (bridge && publicConfig.configured) {
     publicConfig = await bridge.provider.setModel(byId('modelPicker').value);
+    renderModelCapabilities();
     toastMsg('默认模型已切换');
   }
 });
@@ -1018,10 +1283,10 @@ function renderCodexThread(thread) {
   byId('threadHistory').innerHTML = previousTurns.map(turn => {
     const userText = turn.items.filter(item => item.type === 'userMessage').map(item => threadInputText(item.content)).filter(Boolean).join('\n\n');
     const agentText = turn.items.filter(item => item.type === 'agentMessage').map(item => item.text).filter(Boolean).join('\n\n');
-    return (userText ? '<div class="msg history-msg"><i class="user">WK</i><div><small>你</small><p>' + escapeHtml(userText).replace(/\n/g, '<br>') + '</p></div></div>' : '') + (agentText ? '<div class="msg history-msg"><i class="ai">✦</i><div class="agent-response"><small>Codex Flow</small><div class="markdown-body">' + markdownHtml(agentText) + '</div></div></div>' : '');
+    return (userText ? '<div class="msg history-msg"><i class="user">WK</i><div><small>你</small><p>' + escapeHtml(userText).replace(/\n/g, '<br>') + '</p></div></div>' : '') + (agentText ? '<div class="msg history-msg"><i class="ai">✦</i><div class="agent-response"><small>ChatGPT Codex</small><div class="markdown-body">' + markdownHtml(agentText) + '</div></div></div>' : '');
   }).join('');
   secureMarkdownLinks(byId('threadHistory'));
-  byId('agentState').textContent = 'Codex Flow · 已恢复 · ' + (thread.name || thread.id.slice(0, 8));
+  byId('agentState').textContent = 'ChatGPT Codex · 已恢复 · ' + (thread.name || thread.id.slice(0, 8));
   byId('thinking').classList.add('hide');
   const answer = agentItems.map(item => item.text).filter(Boolean).join('\n\n');
   renderMarkdown(answer || '该会话已恢复，可以继续输入新的问题。');
@@ -1170,7 +1435,7 @@ byId('renameCurrentThread').addEventListener('click', async () => {
   try {
     await bridge.appServer.setThreadName({ threadId: currentThreadId, name: name.trim() });
     if (currentThread) currentThread.name = name.trim();
-    byId('agentState').textContent = 'Codex Flow · ' + name.trim();
+    byId('agentState').textContent = 'ChatGPT Codex · ' + name.trim();
     toastMsg('会话名称已更新');
   } catch (error) { toastMsg(cleanError(error)); }
 });
@@ -1201,7 +1466,7 @@ function openSession(session) {
   if (!session) return;
   page('chat');
   prepareConversation(session.prompt, false);
-  byId('agentState').textContent = 'Codex Flow · 历史结果 · ' + (session.model || '未知模型');
+  byId('agentState').textContent = 'ChatGPT Codex · 历史结果 · ' + (session.model || '未知模型');
   byId('thinking').classList.add('hide');
   renderMarkdown(session.response || '该历史任务没有保存文本结果。');
   modal('promptLibraryModal', false);
@@ -1242,7 +1507,7 @@ async function handleQuickAction(button) {
   const text = button.textContent;
   if (text.includes('定时任务')) { byId('taskPrompt').value = byId('userText').textContent || byId('prompt').value; byId('taskName').value = (byId('userText').textContent || '新任务').slice(0,20); byId('newTask').click(); }
   if (text.includes('保存为提示词')) { await bridge.prompts.save({ content: byId('userText').textContent || byId('prompt').value, title: (byId('userText').textContent || '提示词').slice(0,30) }); toastMsg('提示词已保存到本地'); }
-  if (text.includes('分享')) { const file = await bridge.conversation.export({ title: (byId('userText').textContent || '会话').slice(0,30), content: '# ' + (byId('userText').textContent || 'Codex Flow 会话') + '\n\n' + answerMarkdown }); if (file) toastMsg('会话已导出：' + file); }
+  if (text.includes('分享')) { const file = await bridge.conversation.export({ title: (byId('userText').textContent || '会话').slice(0,30), content: '# ' + (byId('userText').textContent || 'ChatGPT Codex 会话') + '\n\n' + answerMarkdown }); if (file) toastMsg('会话已导出：' + file); }
 }
 
 byId('exportUsage').addEventListener('click', () => { const rows = ['时间,模型,输入Token,输出Token,总Token', ...usageRecords.map(r => [new Date(r.createdAt).toISOString(), r.modelId, r.inputTokens, r.outputTokens, r.totalTokens].map(v => '"' + String(v ?? '').replaceAll('"','""') + '"').join(','))]; const blob = new Blob(['\ufeff' + rows.join('\n')], { type:'text/csv;charset=utf-8' }); const link=document.createElement('a'); link.href=URL.createObjectURL(blob); link.download='codex-flow-usage.csv'; link.click(); setTimeout(()=>URL.revokeObjectURL(link.href),1000); });
@@ -1317,7 +1582,10 @@ async function initialize() {
     }
     applyConfig();
     await loadUsage('month');
-    if (publicConfig.configured) bridge.appServer.status().catch(() => {});
+    if (publicConfig.configured) {
+      await bridge.appServer.status().catch(() => {});
+      await loadModelCapabilities();
+    }
     if (publicConfig.configured) modal('welcome', false);
     if (!codexStatus.available) toastMsg('Codex 引擎不可用，将使用普通流式对话');
   } catch (error) {

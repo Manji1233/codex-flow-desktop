@@ -4,7 +4,7 @@ const { ConfigStore } = require('./services/config-store.cjs');
 const { UsageStore } = require('./services/usage-store.cjs');
 const { discoverModels, streamChat } = require('./services/openai-client.cjs');
 const { CODING_PLANS, getCodingPlan, normalizeCodingPlanModels, chooseCodingPlanModel } = require('./services/coding-plans.cjs');
-const { getStatus, listExtensions, installPlugin, removePlugin, addMcp, removeMcp, runAgent } = require('./services/codex-cli-service.cjs');
+const { getStatus, getDiagnostics, listExtensions, installPlugin, removePlugin, addMcp, removeMcp, runAgent } = require('./services/codex-cli-service.cjs');
 const { searchWeb, buildSearchContext, WEB_SEARCH_DEVELOPER_INSTRUCTIONS } = require('./services/web-search-service.cjs');
 const { TaskStore } = require('./services/task-store.cjs');
 const { ContentStore } = require('./services/content-store.cjs');
@@ -22,6 +22,7 @@ let schedulerTimer;
 const activeRequests = new Map();
 const appServerUsage = new Map();
 let taskQueue = Promise.resolve();
+const CHATGPT_RUNTIME_PROVIDER = Object.freeze({ id: 'chatgpt-codex', name: 'ChatGPT Codex', authMode: 'chatgpt' });
 
 function withTaskStore(operation, reload = true) {
   const next = taskQueue.then(async () => {
@@ -42,14 +43,49 @@ async function ensureAppServer() {
   return provider;
 }
 
+async function ensureChatGptAppServer() {
+  await appServer.ensure(CHATGPT_RUNTIME_PROVIDER);
+}
+
+function normalizeChatGptModel(model) {
+  return { ...model, id: model.model || model.id, catalogId: model.id, ownedBy: 'openai-chatgpt' };
+}
+
+async function listChatGptModels() {
+  const models = [];
+  let cursor = null;
+  do {
+    const response = await appServer.request('model/list', { cursor, limit: 100, includeHidden: false });
+    models.push(...(response.data || []).filter(model => !model.hidden).map(normalizeChatGptModel));
+    cursor = response.nextCursor || null;
+  } while (cursor && models.length < 500);
+  return models;
+}
+
+async function syncChatGptAccount() {
+  await ensureChatGptAppServer();
+  const accountResponse = await appServer.request('account/read', { refreshToken: true });
+  if (accountResponse.account?.type !== 'chatgpt') throw new Error('尚未登录 ChatGPT 账户。');
+  const models = await listChatGptModels();
+  const preferred = models.find(model => model.isDefault)?.id || models[0]?.id || null;
+  const config = await configStore.saveChatGptAccount({ account: accountResponse.account, model: preferred, models });
+  const [rateLimits, usage] = await Promise.all([
+    appServer.request('account/rateLimits/read', {}).catch(() => null),
+    appServer.request('account/usage/read', {}).catch(() => null)
+  ]);
+  return { config, account: accountResponse.account, rateLimits, usage };
+}
+
 function interactiveThreadConfig(payload, provider) {
   return {
     model: payload.model || provider.model,
-    modelProvider: 'codex_flow',
+    ...(provider.authMode === 'chatgpt' ? {} : { modelProvider: 'codex_flow' }),
     cwd: payload.workspace || process.cwd(),
     runtimeWorkspaceRoots: payload.workspace ? [payload.workspace] : null,
     approvalPolicy: payload.approvalPolicy || 'on-request',
     sandbox: payload.sandbox || 'workspace-write',
+    personality: payload.personality || null,
+    serviceTier: payload.serviceTier || null,
     developerInstructions: WEB_SEARCH_DEVELOPER_INSTRUCTIONS
   };
 }
@@ -62,7 +98,7 @@ function createWindow() {
     minHeight: 700,
     backgroundColor: '#f4f5f2',
     show: false,
-    title: 'Codex Flow',
+    title: 'ChatGPT Codex',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -161,10 +197,15 @@ async function checkScheduledTasks() {
 
 function registerIpc() {
   ipcMain.handle('config:get-public', () => configStore.publicConfig());
+  ipcMain.handle('config:activate-mode', (_event, mode) => configStore.activateMode(mode));
   ipcMain.handle('coding-plans:list', () => CODING_PLANS.map(plan => ({ id: plan.id, name: plan.name, baseUrl: plan.baseUrl, defaultModel: plan.defaultModel, models: plan.fallbackModels })));
   ipcMain.handle('provider:save-and-discover', (_event, payload) => saveAndDiscoverProvider(payload));
   ipcMain.handle('provider:discover', async () => {
     const provider = configStore.getProviderWithSecret();
+    if (provider.authMode === 'chatgpt') {
+      await ensureAppServer();
+      return configStore.updateModels(await listChatGptModels());
+    }
     let models = await discoverModels(provider);
     const codingPlan = getCodingPlan(provider.baseUrl);
     if (codingPlan) models = normalizeCodingPlanModels(codingPlan, models);
@@ -173,6 +214,29 @@ function registerIpc() {
   ipcMain.handle('provider:set-model', async (_event, model) => {
     const publicConfig = configStore.publicConfig();
     return configStore.updateModels(publicConfig.provider?.models || [], model);
+  });
+  ipcMain.handle('account:login-start', async () => {
+    await ensureChatGptAppServer();
+    const existing = await appServer.request('account/read', { refreshToken: false }).catch(() => ({ account: null }));
+    if (existing.account?.type === 'chatgpt') return { completed: true, snapshot: await syncChatGptAccount() };
+    const response = await appServer.request('account/login/start', {
+      type: 'chatgpt',
+      appBrand: 'chatgpt',
+      codexStreamlinedLogin: true,
+      useHostedLoginSuccessPage: true
+    });
+    if (response.authUrl) await shell.openExternal(response.authUrl);
+    return response;
+  });
+  ipcMain.handle('account:login-cancel', async (_event, loginId) => {
+    await ensureChatGptAppServer();
+    return appServer.request('account/login/cancel', { loginId });
+  });
+  ipcMain.handle('account:sync', () => syncChatGptAccount());
+  ipcMain.handle('account:logout', async () => {
+    await ensureChatGptAppServer();
+    await appServer.request('account/logout', {});
+    return configStore.clearChatGptAccount();
   });
   ipcMain.handle('usage:summary', (_event, range) => usageStore.summary(range));
   ipcMain.handle('usage:list', (_event, limit) => usageStore.list(limit));
@@ -190,6 +254,18 @@ function registerIpc() {
   ipcMain.handle('media:choose', async () => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile','multiSelections'], filters: [{ name: '媒体文件', extensions: ['mp4','mov','mkv','mp3','wav','png','jpg','jpeg','webp'] }] }); return result.canceled ? [] : result.filePaths; });
   ipcMain.handle('images:choose', async () => { const result = await dialog.showOpenDialog(mainWindow, { properties: ['openFile','multiSelections'], filters: [{ name: '图片', extensions: ['png','jpg','jpeg','webp','gif'] }] }); return result.canceled ? [] : result.filePaths; });
   ipcMain.handle('app-server:status', async () => { try { await ensureAppServer(); return { available: true }; } catch (error) { return { available: false, error: error.message }; } });
+  ipcMain.handle('app-server:model-catalog', async () => {
+    await ensureAppServer();
+    const models = [];
+    let cursor = null;
+    do {
+      const response = await appServer.request('model/list', { cursor, limit: 100, includeHidden: false });
+      models.push(...(response.data || []).filter(model => !model.hidden));
+      cursor = response.nextCursor || null;
+    } while (cursor && models.length < 500);
+    const capabilities = await appServer.request('model/provider-capabilities/read', {}).catch(() => ({ webSearch: false, imageGeneration: false, namespaceTools: false }));
+    return { models, capabilities };
+  });
   ipcMain.handle('app-server:thread-list', async (_event, payload = {}) => {
     await ensureAppServer();
     return appServer.request('thread/list', {
@@ -254,6 +330,12 @@ function registerIpc() {
         }
       }
     }
+    if (payload.multiAgentMode === 'proactive') {
+      additionalContext = {
+        ...(additionalContext || {}),
+        'chatgpt-codex-multi-agent': { kind: 'application', value: '本轮允许主动创建和协调子代理并行处理可拆分任务；仅在确实能提升速度或质量时使用。' }
+      };
+    }
     return appServer.request('turn/start', {
       threadId: payload.threadId,
       input,
@@ -263,14 +345,16 @@ function registerIpc() {
       approvalPolicy: payload.approvalPolicy || 'on-request',
       sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
       model: payload.model || null,
-      multiAgentMode: payload.multiAgentMode || 'explicitRequestOnly',
-      ...(payload.multiAgentMode === 'proactive' ? { effort: 'ultra' } : {})
+      effort: payload.effort || null,
+      personality: payload.personality || null,
+      serviceTier: payload.serviceTier || null,
     });
   });
   ipcMain.handle('app-server:turn-steer', async (_event, payload) => { await ensureAppServer(); return appServer.request('turn/steer', { threadId: payload.threadId, expectedTurnId: payload.turnId, input: payload.input }); });
   ipcMain.handle('app-server:turn-interrupt', async (_event, payload) => { await ensureAppServer(); return appServer.request('turn/interrupt', { threadId: payload.threadId, turnId: payload.turnId }); });
   ipcMain.handle('app-server:respond', async (_event, payload) => { await ensureAppServer(); appServer.respond(payload.requestId, payload.result, payload.error); return true; });
   ipcMain.handle('codex:status', () => getStatus());
+  ipcMain.handle('codex:diagnostics', () => getDiagnostics());
   ipcMain.handle('extensions:list', () => listExtensions());
   ipcMain.handle('extensions:install', (_event, pluginId) => installPlugin(pluginId));
   ipcMain.handle('extensions:remove', (_event, pluginId) => removePlugin(pluginId));
@@ -334,6 +418,7 @@ function registerIpc() {
 
   ipcMain.handle('chat:start', async (event, payload) => {
     const provider = configStore.getProviderWithSecret();
+    if (provider.authMode === 'chatgpt') throw new Error('ChatGPT 账户模式需要使用 Codex Agent，无法回退到普通 SSE 对话。');
     const requestId = payload.requestId || crypto.randomUUID();
     const controller = new AbortController();
     activeRequests.set(requestId, { cancel: () => controller.abort() });

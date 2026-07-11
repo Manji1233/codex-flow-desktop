@@ -6,7 +6,7 @@ const SEARCH_HEADERS = {
 };
 
 const WEB_SEARCH_DEVELOPER_INSTRUCTIONS = [
-  '当用户输入中包含 <web_search_results> 时，表示 Codex Flow 客户端已经完成实时联网检索。',
+  '当用户输入中包含 <web_search_results> 时，表示 ChatGPT Codex 客户端已经完成实时联网检索。',
   '必须直接基于这些来源回答，并使用 Markdown 链接标注来源；不得声称当前无法联网。',
   '不要为了重复搜索或测试网络连通性而调用终端、curl、浏览器、Web Search 或 MCP。',
   '只有当用户明确要求执行其他工具操作，或现有来源不足以完成非搜索任务时，才使用相应工具。'

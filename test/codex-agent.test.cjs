@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { findCodexExecutable, cleanCliError, pluginSummary } = require('../electron/services/codex-cli-service.cjs');
+const { findCodexExecutable, cleanCliError, pluginSummary, normalizeVersion, compareVersions } = require('../electron/services/codex-cli-service.cjs');
 const { buildSearchContext, buildSearchQueries, parseBingRss, WEB_SEARCH_DEVELOPER_INSTRUCTIONS } = require('../electron/services/web-search-service.cjs');
 
 test('bundled Codex executable is available', () => {
@@ -18,6 +18,13 @@ test('Codex warning cleanup keeps actionable errors', () => {
     'Request failed: provider does not support responses'
   ].join('\n');
   assert.equal(cleanCliError(message), 'Request failed: provider does not support responses');
+});
+
+test('Codex diagnostics compare stable semantic versions', () => {
+  assert.equal(normalizeVersion('codex-cli 0.144.1'), '0.144.1');
+  assert.equal(compareVersions('0.144.1', '0.144.1'), 0);
+  assert.equal(compareVersions('0.145.0', '0.144.1'), 1);
+  assert.equal(compareVersions('0.143.9', '0.144.1'), -1);
 });
 
 test('plugin summaries include local manifest icons when available', t => {

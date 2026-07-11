@@ -5,7 +5,7 @@ const { safeStorage } = require('electron');
 class ConfigStore {
   constructor(userDataPath) {
     this.filePath = path.join(userDataPath, 'codex-flow-config.json');
-    this.state = { provider: null };
+    this.state = { authMode: null, provider: null, chatgpt: null };
   }
 
   async load() {
@@ -18,18 +18,51 @@ class ConfigStore {
   }
 
   publicConfig() {
+    const savedProvider = this.publicProvider(this.state.provider);
+    const modes = {
+      apiKey: Boolean(this.state.provider?.encryptedApiKey),
+      chatgpt: Boolean(this.state.chatgpt?.account)
+    };
+    if (this.state.authMode === 'chatgpt' && modes.chatgpt) {
+      return {
+        configured: true,
+        authMode: 'chatgpt',
+        availableModes: modes,
+        account: this.state.chatgpt.account,
+        chatgptAccount: this.state.chatgpt.account,
+        savedProvider,
+        provider: {
+          id: 'chatgpt-codex',
+          name: 'ChatGPT Codex',
+          baseUrl: null,
+          model: this.state.chatgpt.model || null,
+          models: this.state.chatgpt.models || [],
+          updatedAt: this.state.chatgpt.updatedAt
+        }
+      };
+    }
     const provider = this.state.provider;
-    if (!provider) return { configured: false, provider: null };
+    if (!provider) return { configured: false, authMode: null, availableModes: modes, account: null, chatgptAccount: this.state.chatgpt?.account || null, savedProvider: null, provider: null };
     return {
       configured: Boolean(provider.encryptedApiKey),
-      provider: {
-        id: provider.id,
-        name: provider.name,
-        baseUrl: provider.baseUrl,
-        model: provider.model || null,
-        models: provider.models || [],
-        updatedAt: provider.updatedAt
-      }
+      authMode: 'apiKey',
+      availableModes: modes,
+      account: null,
+      chatgptAccount: this.state.chatgpt?.account || null,
+      savedProvider,
+      provider: savedProvider
+    };
+  }
+
+  publicProvider(provider) {
+    if (!provider) return null;
+    return {
+      id: provider.id,
+      name: provider.name,
+      baseUrl: provider.baseUrl,
+      model: provider.model || null,
+      models: provider.models || [],
+      updatedAt: provider.updatedAt
     };
   }
 
@@ -49,30 +82,72 @@ class ConfigStore {
       encryptedApiKey,
       updatedAt: new Date().toISOString()
     };
+    this.state.authMode = 'apiKey';
+    await this.persist();
+    return this.publicConfig();
+  }
+
+  async saveChatGptAccount({ account, model, models = [] }) {
+    this.state.chatgpt = {
+      account,
+      model: model || models.find(item => item.isDefault)?.id || models[0]?.id || null,
+      models,
+      updatedAt: new Date().toISOString()
+    };
+    this.state.authMode = 'chatgpt';
+    await this.persist();
+    return this.publicConfig();
+  }
+
+  async activateMode(mode) {
+    if (mode === 'apiKey' && !this.state.provider?.encryptedApiKey) throw new Error('还没有保存 API Key 配置。');
+    if (mode === 'chatgpt' && !this.state.chatgpt?.account) throw new Error('还没有登录 ChatGPT 账户。');
+    this.state.authMode = mode;
     await this.persist();
     return this.publicConfig();
   }
 
   async updateModels(models, model) {
-    if (!this.state.provider) throw new Error('尚未配置模型服务商。');
-    this.state.provider.models = models;
-    this.state.provider.model = model || this.state.provider.model || models[0]?.id || null;
-    this.state.provider.updatedAt = new Date().toISOString();
+    const target = this.state.authMode === 'chatgpt' ? this.state.chatgpt : this.state.provider;
+    if (!target) throw new Error('尚未配置模型服务商。');
+    target.models = models;
+    target.model = model || target.model || models.find(item => item.isDefault)?.id || models[0]?.id || null;
+    target.updatedAt = new Date().toISOString();
+    await this.persist();
+    return this.publicConfig();
+  }
+
+  async clearChatGptAccount() {
+    this.state.chatgpt = null;
+    this.state.authMode = this.state.provider?.encryptedApiKey ? 'apiKey' : null;
     await this.persist();
     return this.publicConfig();
   }
 
   async clearProvider() {
+    this.state.authMode = null;
     this.state.provider = null;
+    this.state.chatgpt = null;
     await this.persist();
     return this.publicConfig();
   }
 
   getProviderWithSecret() {
+    if (this.state.authMode === 'chatgpt' && this.state.chatgpt?.account) {
+      return {
+        id: 'chatgpt-codex',
+        name: 'ChatGPT Codex',
+        authMode: 'chatgpt',
+        model: this.state.chatgpt.model || null,
+        models: this.state.chatgpt.models || [],
+        account: this.state.chatgpt.account
+      };
+    }
     if (!this.state.provider?.encryptedApiKey) throw new Error('请先配置 API Key。');
     if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用。');
     return {
       ...this.state.provider,
+      authMode: 'apiKey',
       apiKey: safeStorage.decryptString(Buffer.from(this.state.provider.encryptedApiKey, 'base64'))
     };
   }

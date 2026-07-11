@@ -6,19 +6,21 @@ function tomlString(value) {
 }
 
 function providerSignature(provider) {
-  return JSON.stringify({ name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey });
+  if (provider?.authMode === 'chatgpt') return JSON.stringify({ authMode: 'chatgpt' });
+  return JSON.stringify({ authMode: 'apiKey', name: provider.name, baseUrl: provider.baseUrl, apiKey: provider.apiKey });
 }
 
 function buildAppServerArgs(provider) {
+  const commonArgs = ['-c', 'sandbox_workspace_write.network_access=true', 'app-server', '--stdio'];
+  if (provider?.authMode === 'chatgpt') return commonArgs;
   return [
     '-c', 'model_provider="codex_flow"',
-    '-c', 'model_providers.codex_flow.name=' + tomlString(provider.name || 'Codex Flow'),
+    '-c', 'model_providers.codex_flow.name=' + tomlString(provider.name || 'ChatGPT Codex'),
     '-c', 'model_providers.codex_flow.base_url=' + tomlString(provider.baseUrl),
     '-c', 'model_providers.codex_flow.env_key="CODEX_FLOW_API_KEY"',
     '-c', 'model_providers.codex_flow.wire_api="responses"',
     '-c', 'model_providers.codex_flow.requires_openai_auth=false',
-    '-c', 'sandbox_workspace_write.network_access=true',
-    'app-server', '--stdio'
+    ...commonArgs
   ];
 }
 
@@ -48,7 +50,7 @@ class AppServerService {
     this.stop();
     const child = spawn(findCodexExecutable(), buildAppServerArgs(provider), {
       cwd: process.cwd(),
-      env: { ...process.env, CODEX_FLOW_API_KEY: provider.apiKey },
+      env: provider?.authMode === 'chatgpt' ? { ...process.env } : { ...process.env, CODEX_FLOW_API_KEY: provider.apiKey },
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -71,7 +73,7 @@ class AppServerService {
       this.onStatus({ type: 'stopped', code });
     });
     await this.request('initialize', {
-      clientInfo: { name: 'codex-flow-desktop', title: 'Codex Flow', version: '0.3.0' },
+      clientInfo: { name: 'codex-flow-desktop', title: 'ChatGPT Codex', version: '0.3.0' },
       capabilities: { experimentalApi: true, requestAttestation: false }
     }, false);
     this.notify('initialized', {});
