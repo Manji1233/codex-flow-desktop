@@ -31,8 +31,9 @@ foreach ($file in @($installer, $blockMap, $updateManifest)) {
 & gh auth status | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Run gh auth login before publishing' }
 
-& gh release view $tag --repo Manji1233/codex-flow-desktop *> $null
-if ($LASTEXITCODE -eq 0) {
+& cmd.exe /d /c "gh release view $tag --repo Manji1233/codex-flow-desktop >nul 2>nul"
+$releaseExists = $LASTEXITCODE -eq 0
+if ($releaseExists) {
   & gh release upload $tag $installer $blockMap $updateManifest --clobber --repo Manji1233/codex-flow-desktop
 } else {
   & gh release create $tag $installer $blockMap $updateManifest --target main --title "ChatGPT Codex $version" --generate-notes --repo Manji1233/codex-flow-desktop
