@@ -67,10 +67,8 @@
     },
     "publish": [
       {
-        "provider": "github",
-        "owner": "Manji1233",
-        "repo": "codex-flow-desktop",
-        "releaseType": "release"
+        "provider": "generic",
+        "url": "https://github.com/Manji1233/codex-flow-desktop/releases/latest/download"
       }
     ]
   }

@@ -19,12 +19,28 @@ function updateErrorSummary(error) {
   return { noRelease: false, message: message || '未知更新错误' };
 }
 
+function versionParts(value) {
+  return String(value || '').replace(/^v/i, '').split(/[.-]/).slice(0, 3).map(part => Number(part) || 0);
+}
+
+function compareVersions(left, right) {
+  const leftParts = versionParts(left);
+  const rightParts = versionParts(right);
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] !== rightParts[index]) return leftParts[index] > rightParts[index] ? 1 : -1;
+  }
+  return 0;
+}
+
 class UpdateService {
-  constructor({ app, autoUpdater, dataProtection, onChange } = {}) {
+  constructor({ app, autoUpdater, dataProtection, onChange, fetchImpl = fetch } = {}) {
     this.app = app;
     this.autoUpdater = autoUpdater;
     this.dataProtection = dataProtection;
     this.onChange = onChange || (() => {});
+    this.fetchImpl = fetchImpl;
+    this.releaseApiUrl = 'https://api.github.com/repos/Manji1233/codex-flow-desktop/releases/latest';
+    this.releaseDownloadRoot = 'https://github.com/Manji1233/codex-flow-desktop/releases/download';
     this.initialized = false;
     this.handlers = [];
     this.state = {
@@ -56,7 +72,7 @@ class UpdateService {
       phase: 'available',
       availableVersion: info.version,
       releaseName: info.releaseName || null,
-      releaseNotes: releaseNotesText(info.releaseNotes),
+      releaseNotes: releaseNotesText(info.releaseNotes) || this.state.releaseNotes,
       message: '发现新版本 ' + info.version,
       error: null
     }));
@@ -95,7 +111,30 @@ class UpdateService {
     this.initialize();
     if (!this.state.supported) return this.update({ phase: 'unsupported', message: '开发模式不执行自动更新，请使用打包安装版' });
     this.update({ phase: 'checking', message: '正在检查客户端更新', error: null });
-    await this.autoUpdater.checkForUpdates();
+    try {
+      const response = await this.fetchImpl(this.releaseApiUrl, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'ChatGPT-Codex-Updater' },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (response.status === 404) return this.update({ phase: 'unpublished', message: '仓库尚未发布安装版；完成首次版本标签发布后即可启用自动更新。', error: null });
+      if (!response.ok) throw new Error('GitHub API HTTP ' + response.status);
+      const release = await response.json();
+      const tag = String(release.tag_name || '');
+      const availableVersion = tag.replace(/^v/i, '');
+      if (!availableVersion) throw new Error('GitHub Release 没有有效版本号。');
+      if (compareVersions(availableVersion, this.state.currentVersion) <= 0) {
+        return this.update({ phase: 'current', availableVersion, releaseName: release.name || tag, releaseNotes: releaseNotesText(release.body), message: '当前客户端已是最新版本', error: null });
+      }
+      if (!/^[0-9A-Za-z._-]+$/.test(tag)) throw new Error('GitHub Release 标签格式无效。');
+      this.autoUpdater.setFeedURL({ provider: 'generic', url: this.releaseDownloadRoot + '/' + encodeURIComponent(tag) });
+      this.update({ phase: 'available', availableVersion, releaseName: release.name || tag, releaseNotes: releaseNotesText(release.body), message: '发现新版本 ' + availableVersion, error: null });
+      await this.autoUpdater.checkForUpdates();
+    } catch (error) {
+      const summary = updateErrorSummary(error);
+      return this.update(summary.noRelease
+        ? { phase: 'unpublished', message: summary.message, error: null }
+        : { phase: 'error', message: '更新失败', error: summary.message });
+    }
     return this.snapshot();
   }
 
@@ -143,4 +182,4 @@ class UpdateService {
   }
 }
 
-module.exports = { UpdateService, releaseNotesText, updateErrorSummary };
+module.exports = { UpdateService, releaseNotesText, updateErrorSummary, compareVersions };
