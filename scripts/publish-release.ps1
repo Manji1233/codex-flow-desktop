@@ -6,8 +6,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$package = Get-Content package.json -Raw | ConvertFrom-Json
-$version = $package.version
+$version = (& node -p "require('./package.json').version").Trim()
+if ($LASTEXITCODE -ne 0 -or -not $version) { throw 'Unable to read package version' }
 $tag = "v$version"
 $installer = Join-Path $root "dist\ChatGPT-Codex-Setup-$version.exe"
 $blockMap = "$installer.blockmap"
