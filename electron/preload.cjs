@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('codex', {
     addMcp: payload => ipcRenderer.invoke('extensions:add-mcp', payload),
     removeMcp: name => ipcRenderer.invoke('extensions:remove-mcp', name)
   },
+  videoSkills: {
+    status: () => ipcRenderer.invoke('video-skills:status'),
+    ensure: () => ipcRenderer.invoke('video-skills:ensure'),
+    onChanged: callback => eventSubscription('video-skills:changed', callback)
+  },
   workspace: {
     choose: () => ipcRenderer.invoke('workspace:choose')
   },

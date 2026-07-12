@@ -71,10 +71,12 @@ let chatGptSnapshot = null;
 let pendingChatGptLoginId = null;
 let clientUpdateStatus = null;
 let updateBackups = [];
+let videoSkillStatus = null;
 let removeAppServerEventListener = null;
 let removeAppServerRequestListener = null;
 let removeAppServerStatusListener = null;
 let removeUpdateListener = null;
+let removeVideoSkillListener = null;
 const collabAgents = new Map();
 
 function cleanError(error) {
@@ -95,7 +97,7 @@ function page(id) {
   if (id === 'tasks') loadTasks();
   if (id === 'cli') loadCliStatus();
   if (id === 'usage') loadUsage('month');
-  if (id === 'video') loadVideoProjects();
+  if (id === 'video') { loadVideoProjects(); loadVideoSkillStatus(); }
 }
 
 document.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', () => page(button.dataset.page)));
@@ -227,6 +229,68 @@ function ensureDeveloperPanels() {
 }
 
 ensureDeveloperPanels();
+
+function ensureVideoSkillPanel() {
+  if (byId('videoSkillPanel')) return;
+  document.querySelector('#video .templates')?.insertAdjacentHTML('beforebegin', '<section class="video-skill-panel" id="videoSkillPanel"><div class="video-skill-heading"><span><b>内置热门视频 Skills</b><small id="videoSkillSummary">首次启动自动准备，无需手动安装</small></span><button class="outline" id="retryVideoSkills">重新检查</button></div><div class="video-skill-grid"><article class="ready" data-video-skill="video-studio"><i class="video-skill-logo">✦</i><span><small>离线内置</small><b>$video-studio</b><p>自动选择 Remotion、HyperFrames 或 FFmpeg，并验证最终视频。</p></span><em id="videoStudioSkillState">准备中</em></article><article data-video-skill="remotion@openai-api-curated"><i class="video-skill-logo" id="remotionSkillIcon">R</i><span><small>Codex 官方精选 · 首选</small><b>Remotion</b><p>程序化剪辑、动效、字幕、图表和 React 视频合成。</p></span><em id="remotionSkillState">准备中</em></article><article data-video-skill="hyperframes@openai-api-curated"><i class="video-skill-logo" id="hyperframesSkillIcon">H</i><span><small>Codex 官方精选 · 增强</small><b>HyperFrames</b><p>HTML、GSAP、网页转视频、配音和音频响应视觉。</p></span><em id="hyperframesSkillState">准备中</em></article></div></section>');
+  byId('retryVideoSkills')?.addEventListener('click', () => ensureVideoSkills(true));
+}
+
+ensureVideoSkillPanel();
+
+function videoSkillStateText(plugin) {
+  if (plugin?.installed) return '✓ 已内置';
+  if (plugin?.status === 'failed') return '待重试';
+  return '安装中';
+}
+
+function renderVideoSkills() {
+  if (!videoSkillStatus || !byId('videoSkillPanel')) return;
+  const bundledReady = Boolean(videoSkillStatus.bundledSkill?.installed);
+  const readyPlugins = videoSkillStatus.plugins?.filter(plugin => plugin.installed) || [];
+  const totalReady = Number(bundledReady) + readyPlugins.length;
+  byId('videoStudioSkillState').textContent = bundledReady ? '✓ 已内置' : '准备失败';
+  document.querySelector('[data-video-skill="video-studio"]')?.classList.toggle('ready', bundledReady);
+  for (const plugin of videoSkillStatus.plugins || []) {
+    const card = document.querySelector('[data-video-skill="' + plugin.id + '"]');
+    if (!card) continue;
+    card.classList.toggle('ready', plugin.installed);
+    card.classList.toggle('warning', plugin.status === 'failed');
+    const state = byId(plugin.id.startsWith('remotion') ? 'remotionSkillState' : 'hyperframesSkillState');
+    if (state) state.textContent = videoSkillStateText(plugin);
+    const icon = byId(plugin.id.startsWith('remotion') ? 'remotionSkillIcon' : 'hyperframesSkillIcon');
+    if (icon && plugin.iconDataUrl) {
+      const color = /^#[0-9a-f]{3,8}$/i.test(plugin.brandColor || '') ? plugin.brandColor : '#fff';
+      icon.style.background = color;
+      icon.innerHTML = '<img src="' + escapeHtml(plugin.iconDataUrl) + '" alt="">';
+    }
+  }
+  byId('videoSkillSummary').textContent = totalReady + '/3 已就绪 · ' + (videoSkillStatus.message || '视频能力准备完成');
+  byId('retryVideoSkills').disabled = ['preparing', 'installing'].includes(videoSkillStatus.phase);
+}
+
+function handleVideoSkillChanged(status) {
+  videoSkillStatus = status;
+  renderVideoSkills();
+}
+
+async function loadVideoSkillStatus() {
+  if (!bridge?.videoSkills) return null;
+  handleVideoSkillChanged(await bridge.videoSkills.status());
+  return videoSkillStatus;
+}
+
+async function ensureVideoSkills(showToast = false) {
+  if (!bridge?.videoSkills) return null;
+  try {
+    handleVideoSkillChanged(await bridge.videoSkills.ensure());
+    if (showToast) toastMsg(videoSkillStatus.message);
+    return videoSkillStatus;
+  } catch (error) {
+    if (showToast) toastMsg(cleanError(error));
+    return videoSkillStatus;
+  }
+}
 
 function ensureLatestCodexPanels() {
   if (byId('runtimeDiagnosticsModal')) return;
@@ -1613,11 +1677,13 @@ document.querySelectorAll('.video-option').forEach(button => button.addEventList
 byId('startVideo').addEventListener('click', async () => {
   if (!publicConfig.configured) return modal('welcome');
   if (!selectedMedia.length) return toastMsg('请先选择视频、图片或音频素材');
-  try { await bridge.extensions.install('remotion@openai-api-curated'); } catch (error) { toastMsg('Remotion 插件未自动安装，Agent 将尝试使用现有视频工具'); }
+  const skills = await ensureVideoSkills(false);
+  if (!skills?.bundledSkill?.installed) return toastMsg('视频 Skill 尚未准备完成，请点击“重新检查”');
   currentWorkspace = selectedMedia[0].replace(/[\\/][^\\/]+$/, '');
   const title = '视频项目 · ' + new Date().toLocaleString('zh-CN');
+  const engines = (skills.plugins || []).filter(plugin => plugin.installed).map(plugin => plugin.name).join('、') || 'FFmpeg';
   page('chat');
-  byId('prompt').value = '请使用 Remotion、FFmpeg 或已安装的视频工具处理以下本地素材：\n' + selectedMedia.join('\n') + '\n\n剪辑要求：' + byId('videoPrompt').value + '\n请实际生成可播放视频文件，并在最终回答中明确输出路径、分辨率、时长和执行结果。';
+  byId('prompt').value = '请使用已内置的 $video-studio Skill 处理以下本地素材：\n' + selectedMedia.join('\n') + '\n\n当前已就绪视频引擎：' + engines + '。\n剪辑要求：' + byId('videoPrompt').value + '\n必须实际渲染并验证可播放视频文件；最终回答明确输出绝对路径、格式、分辨率、时长、使用引擎和执行结果。';
   sendPrompt({ source: 'video', title });
 });
 
@@ -1656,6 +1722,7 @@ async function initialize() {
   removeAppServerEventListener = bridge.appServer.onEvent(handleAppServerEvent);
   removeAppServerRequestListener = bridge.appServer.onRequest(handleAppServerRequest);
   removeUpdateListener = bridge.updates?.onChanged(handleClientUpdateChanged);
+  removeVideoSkillListener = bridge.videoSkills?.onChanged(handleVideoSkillChanged);
   removeAppServerStatusListener = bridge.appServer.onStatus(status => {
     if (status.type === 'ready') document.querySelector('.connection').title = 'Codex app-server 已连接';
     if (status.type === 'stopped') document.querySelector('.connection').title = 'Codex app-server 已停止，将在下次请求时重启';
@@ -1674,6 +1741,7 @@ async function initialize() {
     }
     applyConfig();
     await loadClientUpdateStatus().catch(() => {});
+    await loadVideoSkillStatus().catch(() => {});
     await loadUsage('month');
     if (publicConfig.configured) {
       await bridge.appServer.status().catch(() => {});
@@ -1694,6 +1762,7 @@ window.addEventListener('beforeunload', () => {
   removeAppServerRequestListener?.();
   removeAppServerStatusListener?.();
   removeUpdateListener?.();
+  removeVideoSkillListener?.();
 });
 document.addEventListener('keydown', event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {

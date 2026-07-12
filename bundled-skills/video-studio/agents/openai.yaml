@@ -1,0 +1,4 @@
+interface:
+  display_name: "视频工作室"
+  short_description: "自动选择 Remotion、HyperFrames 或 FFmpeg 完成视频剪辑"
+  default_prompt: "使用 $video-studio 处理本地素材并输出经过验证的可播放视频。"

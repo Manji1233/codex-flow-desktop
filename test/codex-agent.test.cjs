@@ -3,13 +3,20 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { findCodexExecutable, cleanCliError, pluginSummary, normalizeVersion, compareVersions } = require('../electron/services/codex-cli-service.cjs');
+const { findCodexExecutable, cleanCliError, pluginSummary, normalizeVersion, compareVersions, unpackedAsarPath } = require('../electron/services/codex-cli-service.cjs');
 const { buildSearchContext, buildSearchQueries, parseBingRss, WEB_SEARCH_DEVELOPER_INSTRUCTIONS } = require('../electron/services/web-search-service.cjs');
 
 test('bundled Codex executable is available', () => {
   const executable = findCodexExecutable();
   assert.ok(fs.existsSync(executable));
   assert.match(executable, /codex(?:\.exe)?$/i);
+});
+
+test('packaged Codex executables resolve outside app.asar', () => {
+  assert.equal(
+    unpackedAsarPath('C:\\app\\resources\\app.asar\\node_modules\\@openai\\codex\\bin\\codex.exe'),
+    'C:\\app\\resources\\app.asar.unpacked\\node_modules\\@openai\\codex\\bin\\codex.exe'
+  );
 });
 
 test('Codex warning cleanup keeps actionable errors', () => {

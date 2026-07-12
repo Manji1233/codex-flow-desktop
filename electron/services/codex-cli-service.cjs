@@ -12,6 +12,10 @@ const PLATFORM_PACKAGES = {
   'linux-arm64': ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl', 'codex']
 };
 
+function unpackedAsarPath(filePath) {
+  return String(filePath || '').replace(/([\\/])app\.asar([\\/])/i, '$1app.asar.unpacked$2');
+}
+
 function findCodexExecutable() {
   const configured = process.env.CODEX_CLI_PATH;
   if (configured && fs.existsSync(configured)) return configured;
@@ -20,6 +24,8 @@ function findCodexExecutable() {
   try {
     const packagePath = require.resolve(target[0] + '/package.json');
     const executable = path.join(path.dirname(packagePath), 'vendor', target[1], 'bin', target[2]);
+    const unpackedExecutable = unpackedAsarPath(executable);
+    if (unpackedExecutable !== executable && fs.existsSync(unpackedExecutable)) return unpackedExecutable;
     if (fs.existsSync(executable)) return executable;
   } catch {}
   throw new Error('未找到 Codex 引擎，请重新执行 npm install。');
@@ -363,5 +369,6 @@ module.exports = {
   pluginPresentation,
   builtInBrandPresentation,
   normalizeVersion,
-  compareVersions
+  compareVersions,
+  unpackedAsarPath
 };

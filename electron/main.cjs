@@ -12,6 +12,7 @@ const { ContentStore } = require('./services/content-store.cjs');
 const { AppServerService } = require('./services/app-server-service.cjs');
 const { DataProtectionService } = require('./services/data-protection-service.cjs');
 const { UpdateService } = require('./services/update-service.cjs');
+const { VideoSkillService } = require('./services/video-skill-service.cjs');
 
 app.setName('codex-flow-desktop');
 
@@ -23,6 +24,7 @@ let contentStore;
 let appServer;
 let dataProtection;
 let updateService;
+let videoSkillService;
 let schedulerTimer;
 const activeRequests = new Map();
 const appServerUsage = new Map();
@@ -389,6 +391,8 @@ function registerIpc() {
   ipcMain.handle('extensions:remove', (_event, pluginId) => removePlugin(pluginId));
   ipcMain.handle('extensions:add-mcp', (_event, payload) => addMcp(payload));
   ipcMain.handle('extensions:remove-mcp', (_event, name) => removeMcp(name));
+  ipcMain.handle('video-skills:status', () => videoSkillService.snapshot());
+  ipcMain.handle('video-skills:ensure', () => videoSkillService.ensure());
   ipcMain.handle('workspace:choose', async () => {
     const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'], title: '选择 Codex 工作区' });
     return result.canceled ? null : result.filePaths[0];
@@ -508,6 +512,14 @@ app.whenReady().then(async () => {
   taskStore = new TaskStore(app.getPath('userData'));
   contentStore = new ContentStore(app.getPath('userData'));
   await Promise.all([configStore.load(), usageStore.load(), taskStore.load(), contentStore.load()]);
+  const bundledSkillsRoot = app.isPackaged ? path.join(process.resourcesPath, 'bundled-skills') : path.join(app.getAppPath(), 'bundled-skills');
+  videoSkillService = new VideoSkillService({
+    sourceRoot: bundledSkillsRoot,
+    listExtensions,
+    installPlugin,
+    onChange: status => sendToRenderer('video-skills:changed', status)
+  });
+  await videoSkillService.prepareBundledSkill().catch(error => videoSkillService.update({ phase: 'error', message: '内置视频 Skill 安装失败', error: error.message }));
   appServer = new AppServerService({
     onNotification: async notification => {
       sendToRenderer('app-server:event', notification);
@@ -549,6 +561,7 @@ app.whenReady().then(async () => {
   }
   registerIpc();
   createWindow();
+  videoSkillService.ensure().catch(() => {});
   updateService.refreshBackups().catch(() => {});
   if (app.isPackaged) setTimeout(() => updateService.check().catch(() => {}), 10000);
   schedulerTimer = setInterval(checkScheduledTasks, 15000);
