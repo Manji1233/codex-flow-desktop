@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChatGPT Codex 桌面客户端 - 在线体验</title>
+<style>
+:root{--bg:#f4f5f2;--panel:#fff;--side:#181a18;--text:#22241f;--muted:#858b82;--line:#e1e5dd;--green:#b9f46c;--violet:#8d7cf6;--orange:#f2a65d;--blue:#65adf1;--red:#ef655d}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif;color:var(--text);background:var(--bg)}
+.demo-banner{position:fixed;top:0;left:0;right:0;z-index:100;background:linear-gradient(90deg,#20231f,#3a3f38);color:#fff;font-size:12px;padding:10px 18px;text-align:center;display:flex;align-items:center;justify-content:center;gap:12px}
+.demo-banner a{color:var(--green);text-decoration:none;font-weight:700}
+.demo-banner button{border:0;background:rgba(255,255,255,.15);color:#fff;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer}
+.app{height:100vh;display:flex;padding-top:40px}
+.side{width:240px;background:var(--side);color:#edf0eb;padding:20px 14px 14px;display:flex;flex-direction:column;flex:none}
+.brand{display:flex;align-items:center;gap:10px;padding:0 8px 20px}
+.logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#d6ffa5,#8ec64d);display:grid;place-items:center;color:#30411f;font-style:normal;font-weight:800;font-size:16px}
+.brand div b,.brand div small{display:block}
+.brand div b{font-size:15px}
+.brand div small{font-size:10px;color:#777e74;margin-top:2px}
+.new{height:40px;border:1px solid #3a3f38;background:#292c28;color:#fff;border-radius:9px;text-align:left;padding:0 12px;font-size:12px;font-weight:700;margin-bottom:14px;cursor:pointer}
+.side nav{display:flex;flex-direction:column;gap:3px}
+.side nav button{height:40px;border:0;background:transparent;color:#969d93;border-radius:8px;text-align:left;padding:0 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:10px}
+.side nav button:hover,.side nav button.active{background:#2b2f2a;color:#fff}
+.side nav button.active{box-shadow:inset 3px 0 0 var(--green)}
+.side-label{color:#5f665d;font-size:9px;font-weight:800;letter-spacing:1px;margin:24px 11px 8px;text-transform:uppercase}
+.recent button{width:100%;display:flex;align-items:center;gap:8px;border:0;background:transparent;color:#969d93;padding:8px 10px;font-size:11px;text-align:left;cursor:pointer;border-radius:6px}
+.recent button:hover{background:#252825}
+.recent button>i{width:6px;height:6px;border-radius:50%;flex:none}
+.recent small{margin-left:auto;color:#61675e;font-size:9px}
+.side-bottom{margin-top:auto}
+.profile{width:100%;border:0;border-top:1px solid #2b2e2a;background:transparent;color:#fff;display:flex;align-items:center;gap:8px;padding:12px 6px 0;text-align:left;cursor:pointer}
+.profile>span{width:30px;height:30px;border-radius:8px;background:var(--green);color:#27331c;display:grid;place-items:center;font-size:10px;font-weight:800}
+.profile b,.profile small{display:block;font-size:10px}
+.profile small{font-size:8px;color:#737a70;margin-top:2px}
+main{flex:1;min-width:0;display:flex;flex-direction:column}
+main>header{height:64px;background:#ffffffd9;backdrop-filter:blur(15px);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 22px;flex:none}
+main>header b{font-size:13px}
+main>header small{font-size:10px;color:#979c94;border-left:1px solid var(--line);margin-left:10px;padding-left:10px}
+.head-actions{display:flex;gap:8px;align-items:center}
+.head-actions button{height:32px;padding:0 12px;background:#fff;border:1px solid var(--line);border-radius:8px;color:#6e756c;font-size:11px;cursor:pointer}
+.head-actions .model-select{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 10px;font-size:11px;color:#62695f;display:flex;align-items:center;gap:6px}
+.head-actions .model-select i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#78b33d;box-shadow:0 0 0 3px #e2f0d5}
+.page{display:none;flex:1;min-height:0;overflow:auto;padding:28px 32px 80px}
+.page.active{display:block}
+.heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:22px}
+.heading h1{font-size:26px;letter-spacing:-.7px;margin:0 0 6px}
+.heading p{font-size:12px;color:var(--muted);margin:0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px}
+.primary,.outline{border:0;background:#20231f;color:#fff;border-radius:8px;padding:10px 16px;font-size:12px;font-weight:700;cursor:pointer}
+.outline{background:#fff;color:#626860;border:1px solid var(--line)}
+.hero{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding-bottom:80px}
+.orb{width:70px;height:70px;border-radius:20px;background:linear-gradient(135deg,#dcffaf,#8bc449);display:grid;place-items:center;color:#30411f;font-style:normal;font-weight:800;font-size:28px;margin-bottom:20px;box-shadow:0 12px 40px #9bd15033}
+.hero h2{font-size:22px;margin:0 0 8px}
+.hero p{color:var(--muted);font-size:13px;margin:0 0 24px;max-width:420px}
+.input-bar{max-width:700px;width:100%;background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 4px 20px rgba(0,0,0,.04);display:flex;gap:10px;align-items:flex-end}
+.input-bar textarea{flex:1;border:0;outline:0;resize:none;height:24px;max-height:120px;font-size:13px;line-height:1.5;background:transparent;font-family:inherit}
+.input-bar button{width:34px;height:34px;border:0;border-radius:9px;background:var(--green);color:#27331c;display:grid;place-items:center;font-size:16px;cursor:pointer}
+.suggestions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:16px;max-width:700px}
+.suggestions button{border:1px solid var(--line);background:#fff;border-radius:20px;padding:8px 14px;font-size:12px;color:#555c52;cursor:pointer}
+.suggestions button:hover{border-color:#b9c0b3}
+.chat-message{display:flex;gap:14px;margin-bottom:18px;max-width:820px}
+.chat-message.user{margin-left:auto;flex-direction:row-reverse}
+.chat-message .avatar{width:32px;height:32px;border-radius:10px;background:var(--green);color:#27331c;display:grid;place-items:center;font-size:12px;font-weight:800;flex:none}
+.chat-message.user .avatar{background:#20231f;color:#fff}
+.chat-message .bubble{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;font-size:13px;line-height:1.65;max-width:calc(100% - 60px)}
+.chat-message.user .bubble{background:#20231f;color:#fff;border-color:#20231f}
+.chat-message .bubble pre{background:#f5f6f3;border-radius:8px;padding:10px;font:12px/1.5 "Cascadia Code",Consolas,monospace;overflow:auto}
+.chat-message .bubble code{background:#f0f1ee;padding:2px 5px;border-radius:4px;font-family:"Cascadia Code",Consolas,monospace;font-size:12px}
+.chat-message.user .bubble code{background:#333830}
+.feature-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px;margin-top:18px}
+.feature-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
+.feature-card i{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font-size:16px;margin-bottom:10px;background:#f4f5f2}
+.feature-card b{display:block;font-size:13px;margin-bottom:4px}
+.feature-card p{font-size:11px;color:var(--muted);margin:0;line-height:1.5}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.stat-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
+.stat-card b{display:block;font-size:22px;margin-bottom:4px}
+.stat-card small{font-size:10px;color:var(--muted)}
+.setup{width:100%;max-width:460px;margin:0 auto;padding-top:60px}
+.setup .orb{margin:0 auto 24px}
+.setup h2{text-align:center;margin:0 0 8px}
+.setup>p{text-align:center;color:var(--muted);font-size:13px;margin:0 0 28px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:11px;font-weight:700;margin-bottom:6px;color:#555c52}
+.form-group select,.form-group input{width:100%;height:42px;border:1px solid var(--line);border-radius:10px;padding:0 12px;font-size:13px;background:#fff}
+.form-group input:focus,.form-group select:focus{outline:0;border-color:var(--green)}
+.note{font-size:11px;color:var(--muted);line-height:1.5;margin-top:14px}
+.note strong{color:var(--text)}
+.badge{display:inline-block;background:#eef0e9;color:#555c52;border-radius:20px;padding:4px 10px;font-size:10px;font-weight:700}
+.skill-row{display:flex;gap:12px;flex-wrap:wrap}
+.skill-card{flex:1;min-width:220px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;gap:12px;align-items:flex-start}
+.skill-card.ready{border-color:var(--green);background:#fafff3}
+.skill-card i{width:36px;height:36px;border-radius:10px;background:#f4f5f2;display:grid;place-items:center;font-size:16px;flex:none}
+.skill-card b{display:block;font-size:12px;margin-bottom:2px}
+.skill-card small{display:block;font-size:10px;color:var(--muted);margin-bottom:4px}
+.skill-card em{font-size:10px;color:#56852d;font-style:normal;font-weight:700}
+@media (max-width:900px){
+  .side{display:none}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .feature-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="demo-banner" id="banner">
+  <span>🚀 这是网页版界面演示，数据仅在浏览器本地，不会调用真实 API。</span>
+  <a href="https://github.com/Manji1233/codex-flow-desktop/releases/latest" target="_blank">下载真实客户端 →</a>
+  <button onclick="document.getElementById('banner').style.display='none'">隐藏</button>
+</div>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <i class="logo">C</i>
+      <div><b>ChatGPT Codex</b><small>桌面客户端</small></div>
+    </div>
+    <button class="new">+ 新对话</button>
+    <nav>
+      <button class="active" data-page="chat" onclick="showPage('chat')"><span>💬</span> 对话</button>
+      <button data-page="video" onclick="showPage('video')"><span>🎬</span> 视频工作室</button>
+      <button data-page="tasks" onclick="showPage('tasks')"><span>⏰</span> 定时任务</button>
+      <button data-page="usage" onclick="showPage('usage')"><span>📊</span> Token 用量</button>
+      <button data-page="settings" onclick="showPage('settings')"><span>⚙️</span> 设置</button>
+    </nav>
+    <div class="side-label">最近</div>
+    <div class="recent">
+      <button><i class="green"></i> 分析项目结构 <small>2m</small></button>
+      <button><i class="violet"></i> 今天 AI 资讯 <small>1h</small></button>
+      <button><i class="orange"></i> 生成宣传视频 <small>3h</small></button>
+    </div>
+    <div class="side-bottom">
+      <button class="profile"><span>U</span><div><b>未登录</b><small>点击配置 API Key</small></div></button>
+    </div>
+  </aside>
+  <main>
+    <header>
+      <div><b id="pageTitle">对话</b><small>输入 API Key 即可开始真实对话</small></div>
+      <div class="head-actions">
+        <span class="model-select"><i></i> GLM-5.2</span>
+        <button>🌐 联网</button>
+        <button>📎</button>
+      </div>
+    </header>
+
+    <section class="page active" id="chat">
+      <div id="chatWelcome" class="hero">
+        <i class="orb">C</i>
+        <h2>输入 API Key，打开即用</h2>
+        <p>支持 OpenAI、火山方舟、阿里云百炼、智谱 GLM、腾讯云以及任意 OpenAI 兼容接口。</p>
+        <div class="input-bar">
+          <textarea id="demoInput" placeholder="试试问：介绍一下今天的 AI 资讯" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDemo()}"></textarea>
+          <button onclick="sendDemo()">➤</button>
+        </div>
+        <div class="suggestions">
+          <button onclick="setDemo('分析当前目录的代码结构')">分析代码结构</button>
+          <button onclick="setDemo('把这段文字转成视频脚本')">转成视频脚本</button>
+          <button onclick="setDemo('帮我写一份周报')">写一份周报</button>
+          <button onclick="setDemo('推荐几本编程书')">推荐编程书</button>
+        </div>
+      </div>
+      <div id="chatThread" style="display:none;max-width:860px;margin:0 auto;padding:20px 0"></div>
+      <div id="chatComposer" style="display:none;max-width:700px;width:100%;margin:0 auto;padding:0 0 40px">
+        <div class="input-bar">
+          <textarea id="demoInput2" placeholder="继续输入..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendDemo2()}"></textarea>
+          <button onclick="sendDemo2()">➤</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="video">
+      <div class="heading"><div><h1>视频工作室</h1><p>首次打开自动准备官方精选视频 Skills</p></div><button class="primary">选择素材</button></div>
+      <div class="skill-row">
+        <div class="skill-card ready"><i>✦</i><div><b>$video-studio</b><small>离线内置</small><em>✓ 已就绪</em></div></div>
+        <div class="skill-card ready"><i>🎥</i><div><b>Remotion</b><small>Codex 官方精选 · 首选</small><em>✓ 已就绪</em></div></div>
+        <div class="skill-card ready"><i>🌐</i><div><b>HyperFrames</b><small>Codex 官方精选 · 增强</small><em>✓ 已就绪</em></div></div>
+      </div>
+      <div class="feature-grid" style="margin-top:20px">
+        <div class="feature-card"><i>✂️</i><b>自动剪辑</b><p>选择本地素材，Agent 自动选择 Remotion、HyperFrames 或 FFmpeg。</p></div>
+        <div class="feature-card"><i>🎙️</i><b>配音字幕</b><p>自动生成配音、同步字幕，支持音频响应视觉。</p></div>
+        <div class="feature-card"><i>📤</i><b>导出验证</b><p>渲染完成后验证文件可播放，并返回绝对路径与分辨率。</p></div>
+      </div>
+    </section>
+
+    <section class="page" id="tasks">
+      <div class="heading"><div><h1>定时任务</h1><p>客户端运行时自动按秒级计划执行</p></div><button class="primary">+ 新建任务</button></div>
+      <div class="card">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <tr style="color:var(--muted);text-align:left"><th style="padding:8px 0">任务</th><th>类型</th><th>下次执行</th><th>状态</th></tr>
+          <tr style="border-top:1px solid var(--line)"><td style="padding:12px 0"><b>每日 AI 资讯</b><br><small style="color:var(--muted)">联网搜索并总结今天的 AI 资讯</small></td><td>每天 08:00</td><td>明天 08:00</td><td><span style="color:#56852d;font-weight:700">运行中</span></td></tr>
+          <tr style="border-top:1px solid var(--line)"><td style="padding:12px 0"><b>代码审查</b><br><small style="color:var(--muted)">检查工作区未提交改动</small></td><td>每小时 1 次</td><td>14:00</td><td><span style="color:#56852d;font-weight:700">运行中</span></td></tr>
+        </table>
+      </div>
+    </section>
+
+    <section class="page" id="usage">
+      <div class="heading"><div><h1>Token 用量</h1><p>每次请求自动记录，本地账本汇总</p></div><div><button class="outline">今日</button> <button class="primary">本月</button></div></div>
+      <div class="stats">
+        <div class="stat-card"><b id="todayTokens">12,450</b><small>今日</small></div>
+        <div class="stat-card"><b id="monthTokens">128,640</b><small>本月</small></div>
+        <div class="stat-card"><b>842,110</b><small>今年</small></div>
+        <div class="stat-card"><b>1,204,580</b><small>全部</small></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="badge">演示数据</div>
+        <p style="font-size:12px;color:var(--muted);line-height:1.6;margin-top:10px">真实客户端会读取本地 <code>codex-flow-usage.json</code> 账本，按请求时间和模型分类统计。</p>
+      </div>
+    </section>
+
+    <section class="page" id="settings">
+      <div class="setup">
+        <i class="orb">🔑</i>
+        <h2>配置 API Key</h2>
+        <p>选择平台并粘贴密钥，即可开始真实对话。密钥使用 Electron safeStorage 加密保存。</p>
+        <div class="card">
+          <div class="form-group">
+            <label>平台</label>
+            <select><option>OpenAI</option><option>火山方舟</option><option>阿里云百炼</option><option>智谱 GLM</option><option>腾讯云</option><option>自定义接口</option></select>
+          </div>
+          <div class="form-group">
+            <label>API Key</label>
+            <input type="password" placeholder="sk-... 或平台密钥" value="sk-demo-****************">
+          </div>
+          <div class="form-group">
+            <label>模型</label>
+            <select><option>GLM-5.2</option><option>Doubao-Seed-2.0-Code</option><option>gpt-4.1</option><option>自定义模型 ID</option></select>
+          </div>
+          <button class="primary" style="width:100%;margin-top:8px">保存并开始使用</button>
+          <p class="note"><strong>隐私说明：</strong>此网页演示不会保存或上传任何信息。真实客户端将密钥加密存储在本地用户数据目录，不会上传到 GitHub 或任何服务器。</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+function showPage(id){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.side nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  document.querySelector('.side nav button[data-page="'+id+'"]').classList.add('active');
+  const titles={chat:'对话',video:'视频工作室',tasks:'定时任务',usage:'Token 用量',settings:'设置'};
+  document.getElementById('pageTitle').textContent=titles[id];
+}
+function setDemo(text){document.getElementById('demoInput').value=text;}
+function sendDemo(){
+  const input=document.getElementById('demoInput');
+  const text=input.value.trim(); if(!text) return;
+  input.value='';
+  startThread(text);
+}
+function sendDemo2(){
+  const input=document.getElementById('demoInput2');
+  const text=input.value.trim(); if(!text) return;
+  input.value='';
+  addUser(text);
+  setTimeout(()=>addBot('收到。在真实客户端中，我会根据当前工作区、已安装 Skills 和联网搜索结果继续处理。'),600);
+}
+function startThread(text){
+  document.getElementById('chatWelcome').style.display='none';
+  document.getElementById('chatThread').style.display='block';
+  document.getElementById('chatComposer').style.display='block';
+  addUser(text);
+  const replies={
+    '分析当前目录的代码结构':'我会先查看目录结构，再分析主要文件之间的依赖关系。请稍等，真实客户端会启动 Codex Agent 并在终端中逐步执行。',
+    '把这段文字转成视频脚本':'已为你生成视频脚本，并可在“视频工作室”中直接选择 Remotion 或 HyperFrames 渲染。',
+    '帮我写一份周报':'好的，我会根据本周的会话历史、代码提交和任务完成情况生成周报草稿。',
+    '推荐几本编程书':'根据你的项目技术栈，我推荐《Clean Code》《Designing Data-Intensive Applications》和《The Pragmatic Programmer》。'
+  };
+  const reply=replies[text]||'这是一个网页演示回复。真实客户端会调用你配置的模型，自动联网搜索，并返回带来源标注的排版结果。';
+  setTimeout(()=>addBot(reply),800);
+  animateNumber('todayTokens',12450,12450+Math.floor(Math.random()*500+100));
+  animateNumber('monthTokens',128640,128640+Math.floor(Math.random()*500+100));
+}
+function addUser(text){
+  const thread=document.getElementById('chatThread');
+  thread.innerHTML+='<div class="chat-message user"><i class="avatar">U</i><div class="bubble">'+escapeHtml(text)+'</div></div>';
+  thread.scrollTop=thread.scrollHeight;
+}
+function addBot(html){
+  const thread=document.getElementById('chatThread');
+  thread.innerHTML+='<div class="chat-message"><i class="avatar">C</i><div class="bubble">'+html+'</div></div>';
+  thread.scrollTop=thread.scrollHeight;
+}
+function escapeHtml(text){
+  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function animateNumber(id,from,to){
+  const el=document.getElementById(id);
+  const start=performance.now();
+  function step(now){
+    const p=Math.min((now-start)/600,1);
+    const v=Math.floor(from+(to-from)*p);
+    el.textContent=v.toLocaleString();
+    if(p<1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+</script>
+</body>
+</html>
