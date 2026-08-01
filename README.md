@@ -1,8 +1,10 @@
-﻿# ChatGPT Codex 桌面客户端
+# ChatGPT Codex 桌面客户端
 
 > **输入 API Key，打开即用。** 一款为普通用户设计的 Windows 桌面 AI 客户端，不用读文档、不用配环境，装好软件、贴上密钥就能开始对话。
 
 🎮 **在线体验**：https://manji1233.github.io/codex-flow-desktop/（网页界面演示，无需安装）
+
+> 提示：如果 github.io 在你的网络下无法打开，可以直接右键保存 [docs/index.html](https://github.com/Manji1233/codex-flow-desktop/blob/main/docs/index.html) 到本地，双击即可离线体验界面。
 
 ## 一句话介绍
 

@@ -41,7 +41,7 @@ main>header small{font-size:10px;color:#979c94;border-left:1px solid var(--line)
 .head-actions button{height:32px;padding:0 12px;background:#fff;border:1px solid var(--line);border-radius:8px;color:#6e756c;font-size:11px;cursor:pointer}
 .head-actions .model-select{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 10px;font-size:11px;color:#62695f;display:flex;align-items:center;gap:6px}
 .head-actions .model-select i{display:inline-block;width:7px;height:7px;border-radius:50%;background:#78b33d;box-shadow:0 0 0 3px #e2f0d5}
-.page{display:none;flex:1;min-height:0;overflow:auto;padding:28px 32px 80px}
+.page{display:none;flex:1;min-height:0;overflow:auto;padding:28px 32px 80px;height:calc(100vh - 64px - 40px)}
 .page.active{display:block}
 .heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:22px}
 .heading h1{font-size:26px;letter-spacing:-.7px;margin:0 0 6px}
@@ -103,6 +103,16 @@ main>header small{font-size:10px;color:#979c94;border-left:1px solid var(--line)
 </style>
 </head>
 <body>
+<noscript>
+  <div style="padding:60px 20px;text-align:center;font-family:sans-serif">
+    <h2>需要启用 JavaScript</h2>
+    <p>本演示为交互式页面，请在浏览器设置中启用 JavaScript 后刷新。</p>
+  </div>
+</noscript>
+<div id="loading-fallback" style="padding:80px 20px;text-align:center;color:#666;font-family:sans-serif">
+  <p>页面加载中……</p>
+  <p style="font-size:12px">如果长时间空白，可能是网络无法访问 github.io。你可以直接下载 <a href="https://github.com/Manji1233/codex-flow-desktop/blob/main/docs/index.html">docs/index.html</a> 到本地双击打开。</p>
+</div>
 <div class="demo-banner" id="banner">
   <span>🚀 这是网页版界面演示，数据仅在浏览器本地，不会调用真实 API。</span>
   <a href="https://github.com/Manji1233/codex-flow-desktop/releases/latest" target="_blank">下载真实客户端 →</a>
@@ -295,5 +305,9 @@ function animateNumber(id,from,to){
   requestAnimationFrame(step);
 }
 </script>
+document.addEventListener('DOMContentLoaded',()=>{
+  const fb=document.getElementById('loading-fallback');
+  if(fb) fb.style.display='none';
+});
 </body>
 </html>
